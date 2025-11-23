@@ -82,10 +82,6 @@ class SignalApplication implements ConnectomeApplication {
     // Register SignalAfferent component for dynamic creation
     ComponentRegistry.register('SignalAfferent', SignalAfferent);
 
-    // Add element tree infrastructure
-    space.addReceptor(new ElementRequestReceptor());
-    space.addMaintainer(new ElementTreeMaintainer(space));
-
     // Get phone numbers from environment
     const botPhoneNumbersEnv = process.env.BOT_PHONE_NUMBERS || '';
     const botPhones = botPhoneNumbersEnv.split(',').map(p => p.trim()).filter(p => p);

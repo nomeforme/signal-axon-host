@@ -158,11 +158,13 @@ class SignalApplication implements ConnectomeApplication {
     space.addReceptor(typingReceptor);
 
     // Add speech effector
-    space.addEffector(new SignalSpeechEffector({
+    const speechEffector = new SignalSpeechEffector({
       apiUrl: process.env.HTTP_BASE_URL || 'http://localhost:8080',
       botNames,
       maxMessageLength: 400
-    }));
+    });
+    (speechEffector as any).element = space;
+    space.addEffector(speechEffector);
 
     // Initialize and start all afferents
     for (const botElem of space.children) {

@@ -167,23 +167,36 @@ class SignalApplication implements ConnectomeApplication {
     space.addEffector(speechEffector);
 
     // Initialize and start all afferents
-    for (const botElem of space.children) {
-      if (botElem.name.startsWith('bot-')) {
-        const afferent = botElem.components[0] as SignalAfferent;
-        const config = (afferent as any).config || {}; // Access config property directly
+    for (let i = 0; i < CONFIG.bots.length; i++) {
+      const bot = CONFIG.bots[i];
+      const botPhone = botPhones[i];
+      const botElem = space.children.find(child => child.name === `bot-${bot.name}`);
 
-        const context: AfferentContext<any> = {
-          config,
-          afferentId: botElem.id,
-          emit: (event) => space.emit(event),
-          emitError: (error) => console.error(`[${botElem.name}] Error:`, error)
-        };
-
-        await afferent.initialize(context);
-        await afferent.start();
-
-        console.log(`✓ Started afferent for ${botElem.name}`);
+      if (!botElem) {
+        console.warn(`Bot element not found for ${bot.name}`);
+        continue;
       }
+
+      const afferent = botElem.components[0] as SignalAfferent;
+
+      // Create proper config for the afferent
+      const config = {
+        botPhone,
+        wsUrl: process.env.WS_BASE_URL || 'ws://localhost:8080',
+        maxReconnectTime: 5 * 60 * 1000 // 5 minutes
+      };
+
+      const context: AfferentContext<any> = {
+        config,
+        afferentId: botElem.id,
+        emit: (event) => space.emit(event),
+        emitError: (error) => console.error(`[${botElem.name}] Error:`, error)
+      };
+
+      await afferent.initialize(context);
+      await afferent.start();
+
+      console.log(`✓ Started afferent for ${botElem.name}`);
     }
 
     // Create agent elements (one per bot)

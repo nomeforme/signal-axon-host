@@ -234,6 +234,7 @@ class SignalApplication implements ConnectomeApplication {
         agentElementId: agentElem.id,
         agent: agent
       });
+      (effector as any).element = space;
       space.addEffector(effector);
 
       console.log(`✓ Created agent: ${bot.name}`);

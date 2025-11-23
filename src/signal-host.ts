@@ -138,16 +138,24 @@ class SignalApplication implements ConnectomeApplication {
     await new Promise(resolve => setTimeout(resolve, 100));
 
     // Add shared receptors (same for all bots)
-    space.addReceptor(new SignalMessageReceptor({
+    // Mount receptors to the Space before adding them
+    const messageReceptor = new SignalMessageReceptor({
       botUuids,
       botNames,
       groupPrivacyMode: (CONFIG.group_privacy_mode || 'opt-in') as 'opt-in' | 'opt-out',
       randomReplyChance: CONFIG.random_reply_chance || 0,
       maxBotMentionsPerConversation: CONFIG.max_bot_mentions_per_conversation || 10
-    }));
+    });
+    (messageReceptor as any).element = space;
+    space.addReceptor(messageReceptor);
 
-    space.addReceptor(new SignalReceiptReceptor());
-    space.addReceptor(new SignalTypingReceptor());
+    const receiptReceptor = new SignalReceiptReceptor();
+    (receiptReceptor as any).element = space;
+    space.addReceptor(receiptReceptor);
+
+    const typingReceptor = new SignalTypingReceptor();
+    (typingReceptor as any).element = space;
+    space.addReceptor(typingReceptor);
 
     // Add speech effector
     space.addEffector(new SignalSpeechEffector({

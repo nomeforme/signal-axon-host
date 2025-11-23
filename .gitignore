@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.log
+.env
+signal-bot-state/
+.DS_Store
+*.swp
+*.swo

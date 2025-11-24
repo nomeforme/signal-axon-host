@@ -33,7 +33,8 @@ import {
   SignalMessageReceptor,
   SignalReceiptReceptor,
   SignalTypingReceptor,
-  SignalSpeechEffector
+  SignalSpeechEffector,
+  MessageConsistencyReceptor
 } from 'signal-axon';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
@@ -271,6 +272,28 @@ class SignalApplication implements ConnectomeApplication {
     const typingReceptor = new SignalTypingReceptor();
     (typingReceptor as any).element = space;
     space.addReceptor(typingReceptor);
+
+    // Add message consistency receptor to detect and reconnect missing bots
+    const reconnectBot = (botPhone: string) => {
+      const botElem = space.children.find(child => {
+        const afferent = child.components[0] as SignalAfferent;
+        return (afferent as any).config?.botPhone === botPhone;
+      });
+
+      if (botElem) {
+        const afferent = botElem.components[0] as SignalAfferent;
+        console.log(`  ↻ Closing and reconnecting [${botPhone}]`);
+        afferent.stop().then(() => afferent.start());
+      }
+    };
+
+    const consistencyReceptor = new MessageConsistencyReceptor({
+      botUuids,
+      botNames,
+      reconnectBot
+    });
+    (consistencyReceptor as any).element = space;
+    space.addReceptor(consistencyReceptor);
 
     // Add speech effector
     const speechEffector = new SignalSpeechEffector({

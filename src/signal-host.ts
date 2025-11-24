@@ -98,7 +98,6 @@ class SignalApplication implements ConnectomeApplication {
     // Build bot UUID and name maps (for mention detection and display)
     const botUuids = new Map<string, string>();
     const botNames = new Map<string, string>();
-    const botPhoneToAgentId = new Map<string, string>();
 
     // We'll fetch UUIDs after afferents are connected
     // For now, just set up names
@@ -185,9 +184,6 @@ class SignalApplication implements ConnectomeApplication {
       const agentElem = new Element(`agent-${bot.name}`);
       space.addChild(agentElem);
 
-      // Map botPhone to agent element ID for targeting
-      botPhoneToAgentId.set(botPhone, agentElem.id);
-
       // Get tools for this bot
       const tools = getToolsForBot(bot.tools || []);
 
@@ -215,11 +211,10 @@ class SignalApplication implements ConnectomeApplication {
       console.log(`✓ Created agent: ${bot.name}`);
     }
 
-    // Add shared receptors AFTER agents are created (so botPhoneToAgentId map is populated)
+    // Add shared receptors AFTER agents are created
     const messageReceptor = new SignalMessageReceptor({
       botUuids,
       botNames,
-      botPhoneToAgentId,
       groupPrivacyMode: (CONFIG.group_privacy_mode || 'opt-in') as 'opt-in' | 'opt-out',
       randomReplyChance: CONFIG.random_reply_chance || 0,
       maxBotMentionsPerConversation: CONFIG.max_bot_mentions_per_conversation || 10

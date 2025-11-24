@@ -273,12 +273,23 @@ class SignalApplication implements ConnectomeApplication {
     (typingReceptor as any).element = space;
     space.addReceptor(typingReceptor);
 
+    // Pending messages queue for re-processing after reconnection
+    const pendingMessages = new Map<string, any[]>();
+
     // Add message consistency receptor to detect and reconnect missing bots
-    const reconnectBot = (botPhone: string) => {
+    const reconnectBot = (botPhone: string, queuedMessage?: any) => {
       const botName = botNames.get(botPhone);
       if (!botName) {
         console.error(`  ⚠ Cannot reconnect - no bot name found for ${botPhone}`);
         return;
+      }
+
+      // Queue the message for re-processing
+      if (queuedMessage) {
+        if (!pendingMessages.has(botPhone)) {
+          pendingMessages.set(botPhone, []);
+        }
+        pendingMessages.get(botPhone)!.push(queuedMessage);
       }
 
       const botElem = space.children.find(child => child.name === `bot-${botName}`);
@@ -294,7 +305,25 @@ class SignalApplication implements ConnectomeApplication {
       }
 
       console.log(`  ↻ Closing and reconnecting [${botPhone}] (${botName})`);
-      afferent.stop().then(() => afferent.start());
+      afferent.stop().then(() => {
+        afferent.start().then(() => {
+          // Re-process pending messages after reconnection
+          const pending = pendingMessages.get(botPhone);
+          if (pending && pending.length > 0) {
+            console.log(`  ↻ Re-processing ${pending.length} pending message(s) for [${botPhone}]`);
+            for (const msgPayload of pending) {
+              // Re-emit the message event so it gets processed by receptors
+              space.emit({
+                topic: 'signal:message',
+                source: { elementId: botElem.id, elementPath: [] },
+                timestamp: msgPayload.timestamp || Date.now(),
+                payload: msgPayload
+              });
+            }
+            pendingMessages.delete(botPhone);
+          }
+        });
+      });
     };
 
     const consistencyReceptor = new MessageConsistencyReceptor({

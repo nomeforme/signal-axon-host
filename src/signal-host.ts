@@ -9,6 +9,7 @@
 import { config as loadEnv } from 'dotenv';
 loadEnv();
 
+import axios from 'axios';
 import {
   ConnectomeHost,
   Space,
@@ -100,12 +101,36 @@ class SignalApplication implements ConnectomeApplication {
     const botUuids = new Map<string, string>();
     const botNames = new Map<string, string>();
 
-    // We'll fetch UUIDs after afferents are connected
-    // For now, just set up names
-    for (let i = 0; i < Math.min(botPhones.length, CONFIG.bots.length); i++) {
-      const bot = CONFIG.bots[i];
-      const botPhone = botPhones[i];
-      botNames.set(botPhone, bot.name);
+    // Fetch UUIDs for all bots from Signal API
+    console.log('Fetching bot UUIDs from Signal API...');
+    try {
+      const response = await axios.get(`${SIGNAL_API_URL}/v1/accounts`);
+      const accounts = response.data;
+
+      for (let i = 0; i < Math.min(botPhones.length, CONFIG.bots.length); i++) {
+        const bot = CONFIG.bots[i];
+        const botPhone = botPhones[i];
+        botNames.set(botPhone, bot.name);
+
+        // Find the account for this bot phone
+        const account = accounts.find((acc: any) => acc.number === botPhone);
+        if (account?.uuid) {
+          botUuids.set(botPhone, account.uuid);
+          console.log(`  ${bot.name} (${botPhone}): ${account.uuid}`);
+        } else {
+          console.warn(`  Warning: No UUID found for ${bot.name} (${botPhone})`);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to fetch bot UUIDs:', error);
+      console.warn('Continuing without UUIDs - bot message filtering may not work correctly');
+
+      // Still set up names even if UUID fetch fails
+      for (let i = 0; i < Math.min(botPhones.length, CONFIG.bots.length); i++) {
+        const bot = CONFIG.bots[i];
+        const botPhone = botPhones[i];
+        botNames.set(botPhone, bot.name);
+      }
     }
 
     // Create bot elements via VEIL (Connectome-native pattern)

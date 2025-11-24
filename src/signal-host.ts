@@ -102,9 +102,10 @@ class SignalApplication implements ConnectomeApplication {
     const botNames = new Map<string, string>();
 
     // Fetch UUIDs for all bots from Signal API
+    const signalApiUrl = process.env.HTTP_BASE_URL || 'http://signal-api:8080';
     console.log('Fetching bot UUIDs from Signal API...');
     try {
-      const response = await axios.get(`${SIGNAL_API_URL}/v1/accounts`);
+      const response = await axios.get(`${signalApiUrl}/v1/accounts`);
       const accounts = response.data;
 
       for (let i = 0; i < Math.min(botPhones.length, CONFIG.bots.length); i++) {

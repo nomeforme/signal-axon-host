@@ -9,6 +9,8 @@
 import { config as loadEnv } from 'dotenv';
 loadEnv();
 
+import fs from 'fs';
+import path from 'path';
 import axios from 'axios';
 import {
   ConnectomeHost,
@@ -101,32 +103,45 @@ class SignalApplication implements ConnectomeApplication {
     const botUuids = new Map<string, string>();
     const botNames = new Map<string, string>();
 
-    // Fetch UUIDs for all bots from Signal API
-    const signalApiUrl = process.env.HTTP_BASE_URL || 'http://signal-api:8080';
-    console.log('Fetching bot UUIDs from Signal API...');
+    // Fetch UUIDs for all bots from Signal CLI accounts.json file
+    console.log('Loading bot UUIDs from accounts.json...');
+    const accountsPath = '/home/.local/share/signal-api/data/accounts.json';
+
     try {
-      const response = await axios.get(`${signalApiUrl}/v1/accounts`);
-      const accounts = response.data;
+      if (fs.existsSync(accountsPath)) {
+        const accountsData = JSON.parse(fs.readFileSync(accountsPath, 'utf8'));
+        const accounts = accountsData.accounts || [];
 
-      for (let i = 0; i < Math.min(botPhones.length, CONFIG.bots.length); i++) {
-        const bot = CONFIG.bots[i];
-        const botPhone = botPhones[i];
-        botNames.set(botPhone, bot.name);
+        for (let i = 0; i < Math.min(botPhones.length, CONFIG.bots.length); i++) {
+          const bot = CONFIG.bots[i];
+          const botPhone = botPhones[i];
+          botNames.set(botPhone, bot.name);
 
-        // Find the account for this bot phone
-        const account = accounts.find((acc: any) => acc.number === botPhone);
-        if (account?.uuid) {
-          botUuids.set(botPhone, account.uuid);
-          console.log(`  ${bot.name} (${botPhone}): ${account.uuid}`);
-        } else {
-          console.warn(`  Warning: No UUID found for ${bot.name} (${botPhone})`);
+          // Find the account for this bot phone
+          const account = accounts.find((acc: any) => acc.number === botPhone);
+          if (account?.uuid) {
+            botUuids.set(botPhone, account.uuid);
+            console.log(`  ${bot.name} (${botPhone}): ${account.uuid}`);
+          } else {
+            console.warn(`  Warning: No UUID found for ${bot.name} (${botPhone})`);
+          }
+        }
+      } else {
+        console.error(`accounts.json not found at ${accountsPath}`);
+        console.warn('Continuing without UUIDs - bot message filtering may not work correctly');
+
+        // Still set up names even if file not found
+        for (let i = 0; i < Math.min(botPhones.length, CONFIG.bots.length); i++) {
+          const bot = CONFIG.bots[i];
+          const botPhone = botPhones[i];
+          botNames.set(botPhone, bot.name);
         }
       }
     } catch (error) {
-      console.error('Failed to fetch bot UUIDs:', error);
+      console.error('Failed to load bot UUIDs:', error);
       console.warn('Continuing without UUIDs - bot message filtering may not work correctly');
 
-      // Still set up names even if UUID fetch fails
+      // Still set up names even if error occurs
       for (let i = 0; i < Math.min(botPhones.length, CONFIG.bots.length); i++) {
         const bot = CONFIG.bots[i];
         const botPhone = botPhones[i];

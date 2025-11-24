@@ -275,16 +275,26 @@ class SignalApplication implements ConnectomeApplication {
 
     // Add message consistency receptor to detect and reconnect missing bots
     const reconnectBot = (botPhone: string) => {
-      const botElem = space.children.find(child => {
-        const afferent = child.components[0] as SignalAfferent;
-        return (afferent as any).config?.botPhone === botPhone;
-      });
-
-      if (botElem) {
-        const afferent = botElem.components[0] as SignalAfferent;
-        console.log(`  ↻ Closing and reconnecting [${botPhone}]`);
-        afferent.stop().then(() => afferent.start());
+      const botName = botNames.get(botPhone);
+      if (!botName) {
+        console.error(`  ⚠ Cannot reconnect - no bot name found for ${botPhone}`);
+        return;
       }
+
+      const botElem = space.children.find(child => child.name === `bot-${botName}`);
+      if (!botElem) {
+        console.error(`  ⚠ Cannot reconnect - bot element not found for ${botName}`);
+        return;
+      }
+
+      const afferent = botElem.components[0] as SignalAfferent;
+      if (!afferent) {
+        console.error(`  ⚠ Cannot reconnect - no afferent found for ${botName}`);
+        return;
+      }
+
+      console.log(`  ↻ Closing and reconnecting [${botPhone}] (${botName})`);
+      afferent.stop().then(() => afferent.start());
     };
 
     const consistencyReceptor = new MessageConsistencyReceptor({

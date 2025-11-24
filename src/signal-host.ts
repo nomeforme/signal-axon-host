@@ -98,6 +98,7 @@ class SignalApplication implements ConnectomeApplication {
     // Build bot UUID and name maps (for mention detection and display)
     const botUuids = new Map<string, string>();
     const botNames = new Map<string, string>();
+    const botPhoneToAgentId = new Map<string, string>();
 
     // We'll fetch UUIDs after afferents are connected
     // For now, just set up names
@@ -136,35 +137,6 @@ class SignalApplication implements ConnectomeApplication {
 
     // Wait for element creation
     await new Promise(resolve => setTimeout(resolve, 100));
-
-    // Add shared receptors (same for all bots)
-    // Mount receptors to the Space before adding them
-    const messageReceptor = new SignalMessageReceptor({
-      botUuids,
-      botNames,
-      groupPrivacyMode: (CONFIG.group_privacy_mode || 'opt-in') as 'opt-in' | 'opt-out',
-      randomReplyChance: CONFIG.random_reply_chance || 0,
-      maxBotMentionsPerConversation: CONFIG.max_bot_mentions_per_conversation || 10
-    });
-    (messageReceptor as any).element = space;
-    space.addReceptor(messageReceptor);
-
-    const receiptReceptor = new SignalReceiptReceptor();
-    (receiptReceptor as any).element = space;
-    space.addReceptor(receiptReceptor);
-
-    const typingReceptor = new SignalTypingReceptor();
-    (typingReceptor as any).element = space;
-    space.addReceptor(typingReceptor);
-
-    // Add speech effector
-    const speechEffector = new SignalSpeechEffector({
-      apiUrl: process.env.HTTP_BASE_URL || 'http://localhost:8080',
-      botNames,
-      maxMessageLength: 400
-    });
-    (speechEffector as any).element = space;
-    space.addEffector(speechEffector);
 
     // Initialize and start all afferents
     for (let i = 0; i < CONFIG.bots.length; i++) {
@@ -213,6 +185,9 @@ class SignalApplication implements ConnectomeApplication {
       const agentElem = new Element(`agent-${bot.name}`);
       space.addChild(agentElem);
 
+      // Map botPhone to agent element ID for targeting
+      botPhoneToAgentId.set(botPhone, agentElem.id);
+
       // Get tools for this bot
       const tools = getToolsForBot(bot.tools || []);
 
@@ -239,6 +214,35 @@ class SignalApplication implements ConnectomeApplication {
 
       console.log(`✓ Created agent: ${bot.name}`);
     }
+
+    // Add shared receptors AFTER agents are created (so botPhoneToAgentId map is populated)
+    const messageReceptor = new SignalMessageReceptor({
+      botUuids,
+      botNames,
+      botPhoneToAgentId,
+      groupPrivacyMode: (CONFIG.group_privacy_mode || 'opt-in') as 'opt-in' | 'opt-out',
+      randomReplyChance: CONFIG.random_reply_chance || 0,
+      maxBotMentionsPerConversation: CONFIG.max_bot_mentions_per_conversation || 10
+    });
+    (messageReceptor as any).element = space;
+    space.addReceptor(messageReceptor);
+
+    const receiptReceptor = new SignalReceiptReceptor();
+    (receiptReceptor as any).element = space;
+    space.addReceptor(receiptReceptor);
+
+    const typingReceptor = new SignalTypingReceptor();
+    (typingReceptor as any).element = space;
+    space.addReceptor(typingReceptor);
+
+    // Add speech effector
+    const speechEffector = new SignalSpeechEffector({
+      apiUrl: process.env.HTTP_BASE_URL || 'http://localhost:8080',
+      botNames,
+      maxMessageLength: 400
+    });
+    (speechEffector as any).element = space;
+    space.addEffector(speechEffector);
 
     // Add context transform (builds HUD context for agents)
     const contextTransform = new ContextTransform({});

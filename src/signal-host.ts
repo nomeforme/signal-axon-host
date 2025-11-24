@@ -312,12 +312,14 @@ class SignalApplication implements ConnectomeApplication {
           if (pending && pending.length > 0) {
             console.log(`  ↻ Re-processing ${pending.length} pending message(s) for [${botPhone}]`);
             for (const msgPayload of pending) {
+              // Update the botPhone in the payload to match the reconnected bot
+              const updatedPayload = { ...msgPayload, botPhone };
               // Re-emit the message event so it gets processed by receptors
               space.emit({
                 topic: 'signal:message',
                 source: { elementId: botElem.id, elementPath: [] },
                 timestamp: msgPayload.timestamp || Date.now(),
-                payload: msgPayload
+                payload: updatedPayload
               });
             }
             pendingMessages.delete(botPhone);

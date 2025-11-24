@@ -22,7 +22,6 @@ import {
   ElementRequestReceptor,
   ElementTreeMaintainer
 } from 'connectome-ts';
-import { ActiveStreamTransform } from 'connectome-ts/dist/transforms/active-stream-transform.js';
 import type { ConnectomeApplication } from 'connectome-ts';
 import type { AfferentContext } from 'connectome-ts';
 import {
@@ -239,10 +238,6 @@ class SignalApplication implements ConnectomeApplication {
     });
     (speechEffector as any).element = space;
     space.addEffector(speechEffector);
-
-    // Add active stream transform (sets frame.activeStream based on facet streamIds)
-    const activeStreamTransform = new ActiveStreamTransform();
-    await activeStreamTransform.mount(space);
 
     // Add context transform (builds HUD context for agents)
     const contextTransform = new ContextTransform({});

@@ -170,6 +170,7 @@ class SignalApplication implements ConnectomeApplication {
             config: {
               botPhone,
               wsUrl: process.env.WS_BASE_URL || 'ws://localhost:8080',
+              httpUrl: process.env.HTTP_BASE_URL || 'http://localhost:8080',
               maxReconnectTime: 5 * 60 * 1000 // 5 minutes
             }
           }]
@@ -197,6 +198,7 @@ class SignalApplication implements ConnectomeApplication {
       const config = {
         botPhone,
         wsUrl: process.env.WS_BASE_URL || 'ws://localhost:8080',
+        httpUrl: process.env.HTTP_BASE_URL || 'http://localhost:8080',
         maxReconnectTime: 5 * 60 * 1000 // 5 minutes
       };
 

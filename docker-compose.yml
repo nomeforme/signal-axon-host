@@ -28,6 +28,8 @@ services:
     depends_on:
       signal-api:
         condition: service_healthy
+    # Clear state on startup for fresh connections
+    command: sh -c "rm -rf /app/signal-bot-state/* && npm start"
     volumes:
       # Mount config files
       - ./config.json:/app/config.json:ro

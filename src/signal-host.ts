@@ -21,12 +21,12 @@ import {
   AnthropicProvider,
   BasicAgent,
   AgentEffector,
-  ActionEffector,
   ContextTransform,
   ElementRequestReceptor,
   ElementTreeMaintainer
 } from 'connectome-ts';
 import { ActiveStreamTransform } from 'connectome-ts/dist/transforms/active-stream-transform.js';
+import { ActionEffector } from 'connectome-ts/dist/spaces/action-effector.js';
 import type { ConnectomeApplication } from 'connectome-ts';
 import type { AfferentContext } from 'connectome-ts';
 import {

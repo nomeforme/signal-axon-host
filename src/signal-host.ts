@@ -21,6 +21,7 @@ import {
   AnthropicProvider,
   BasicAgent,
   AgentEffector,
+  ActionEffector,
   ContextTransform,
   ElementRequestReceptor,
   ElementTreeMaintainer
@@ -39,7 +40,7 @@ import {
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { getToolsForBot } from './tools.js';
+import { ToolsComponent } from './tools-component.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -215,6 +216,13 @@ class SignalApplication implements ConnectomeApplication {
       console.log(`✓ Started afferent for ${botElem.name}`);
     }
 
+    // Create tools element (shared by all agents)
+    // Following Connectome pattern: tools are element-bound actions
+    const toolsElement = new Element('tools');
+    toolsElement.addComponent(new ToolsComponent());
+    space.addChild(toolsElement);
+    console.log('✓ Created tools element with ToolsComponent');
+
     // Create agent elements (one per bot)
     const llmProvider = (space as any).getReference?.('provider:llm.primary');
     if (!llmProvider) {
@@ -229,15 +237,13 @@ class SignalApplication implements ConnectomeApplication {
       const agentElem = new Element(`agent-${bot.name}`);
       space.addChild(agentElem);
 
-      // Get tools for this bot
-      const tools = getToolsForBot(bot.tools || []);
-
       // Create agent with bot-specific config
+      // Tools are discovered from VEIL action-definition facets (Connectome pattern)
       const agent = new BasicAgent({
         config: {
           name: bot.name,
-          systemPrompt: 'You are a helpful AI assistant communicating via Signal messenger.',
-          tools: tools
+          systemPrompt: 'You are a helpful AI assistant communicating via Signal messenger.'
+          // No tools here - they're discovered from VEIL via action-definition facets
         },
         provider: llmProvider,
         veilStateManager: veilState
@@ -255,6 +261,12 @@ class SignalApplication implements ConnectomeApplication {
 
       console.log(`✓ Created agent: ${bot.name}`);
     }
+
+    // Add ActionEffector to route action facets to element handlers
+    const actionEffector = new ActionEffector();
+    (actionEffector as any).element = space;
+    space.addEffector(actionEffector);
+    console.log('✓ Added ActionEffector for tool execution');
 
     // Add shared receptors AFTER agents are created
     const messageReceptor = new SignalMessageReceptor({
@@ -366,6 +378,19 @@ class SignalApplication implements ConnectomeApplication {
 
   async onStart(space: Space, veilState: VEILStateManager): Promise<void> {
     console.log('🚀 Signal bots started!\n');
+
+    // Emit an init event to trigger a frame and process deferred operations
+    // This ensures components' onFirstFrame is called and tools are registered in VEIL
+    space.emit({
+      topic: 'system:init',
+      payload: { reason: 'Initialize components and register tools' },
+      timestamp: Date.now(),
+      source: { elementId: 'host', elementPath: [] }
+    });
+
+    // Give time for frame to process
+    await new Promise(resolve => setTimeout(resolve, 100));
+    console.log('✓ Initial event emitted for component initialization');
   }
 
   async onRestore(space: Space, veilState: VEILStateManager): Promise<void> {

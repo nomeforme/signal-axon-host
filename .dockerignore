@@ -1,9 +1,0 @@
-node_modules
-dist
-signal-bot-state
-.env
-*.log
-.git
-.gitignore
-README.md
-SETUP.md

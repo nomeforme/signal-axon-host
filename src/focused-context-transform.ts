@@ -83,8 +83,17 @@ export class FocusedContextTransform extends BaseTransform {
             return frame.activeStream.streamId === focusedStreamId;
           }
 
-          // Frames without activeStream after setup are likely receipts/typing - exclude them
-          // unless they contain no actual message content
+          // Check if frame contains any facets for the focused stream
+          // This catches agent speech which has streamId on facet but not on frame
+          if (frame.deltas) {
+            for (const delta of frame.deltas) {
+              if (delta.type === 'addFacet' && delta.facet?.streamId === focusedStreamId) {
+                return true;
+              }
+            }
+          }
+
+          // Frames without activeStream or matching facets are likely receipts/typing - exclude them
           return false;
         });
 
@@ -104,17 +113,31 @@ export class FocusedContextTransform extends BaseTransform {
 
         console.log(`[FocusedContextTransform] Filtered ${fullState.frameHistory.length} frames to ${filteredFrames.length} for stream ${focusedStreamId}`);
 
+        // Get bot name from targetAgent (set by SignalMessageReceptor)
+        const botName = activationState.targetAgent;
+
+        // Build system prompt with bot identity and Signal formatting
+        const systemPrompt = botName
+          ? `You are in a Signal group chat. Your username in this conversation is ${botName}. Here participant messages are prefixed with "username: ". Before sending a message, always check this against your own username to determine if a given message was sent by you or not. You can mention other participants with @username.
+
+Signal supports these text formatting options:
+- *bold* for bold
+- _italic_ for italic
+- ~monospace~ for monospace
+- ~strikethrough~ for strikethrough`
+          : activationState.systemPrompt || this.defaultOptions?.systemPrompt;
+
         // Build agent options
         const agentOptions: HUDConfig = {
           ...this.defaultOptions,
-          systemPrompt: activationState.systemPrompt || this.defaultOptions?.systemPrompt,
+          systemPrompt,
           maxTokens: activationState.maxTokens || this.defaultOptions?.maxTokens || 4000,
           metadata: this.defaultOptions?.metadata,
           renderContext: {
             ...this.defaultOptions?.renderContext,
             focusedStream: focusedStreamId
           },
-          formatConfig: activationState.targetAgentId ? {
+          formatConfig: botName ? {
             assistant: {
               prefix: '<my_turn>\n',
               suffix: '\n</my_turn>'
@@ -130,6 +153,25 @@ export class FocusedContextTransform extends BaseTransform {
           undefined, // No compression
           agentOptions
         );
+
+        // Inject system prompt by APPENDING to existing system message (not replacing)
+        // The Anthropic provider only uses the FIRST system message, so we need to combine
+        // our bot identity prompt with any existing tool instructions
+        if (agentOptions.systemPrompt) {
+          const existingSystemMsg = context.messages.find((m: any) => m.role === 'system');
+          if (existingSystemMsg) {
+            // Prepend our prompt to existing system content (tool instructions come after)
+            existingSystemMsg.content = `${existingSystemMsg.content}\n\n${agentOptions.systemPrompt}`;
+            console.log(`[FocusedContextTransform] Appended system prompt to existing system message for ${botName}`);
+          } else {
+            // No existing system message, create one
+            context.messages.unshift({
+              role: 'system',
+              content: agentOptions.systemPrompt
+            });
+            console.log(`[FocusedContextTransform] Created new system message for ${botName}`);
+          }
+        }
 
         // Create rendered-context facet
         const contextFacetId = `context-${id}-${Date.now()}`;

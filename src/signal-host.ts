@@ -25,6 +25,7 @@ import {
   ElementTreeMaintainer
 } from 'connectome-ts';
 import { FocusedContextTransform } from './focused-context-transform.js';
+import { SpeakerPrefixReceptor } from './speaker-prefix-receptor.js';
 import { ActiveStreamTransform } from 'connectome-ts/dist/transforms/active-stream-transform.js';
 import { ActionEffector } from 'connectome-ts/dist/spaces/action-effector.js';
 import type { ConnectomeApplication } from 'connectome-ts';
@@ -242,8 +243,7 @@ class SignalApplication implements ConnectomeApplication {
       const agent = new BasicAgent({
         config: {
           name: bot.name,
-          systemPrompt: 'You are a helpful AI assistant communicating via Signal messenger.'
-          // No tools here - they're discovered from VEIL via action-definition facets
+          systemPrompt: `You are in a Signal group chat. Your username in this conversation is ${bot.name}. You can mention other participants with @username.`
         },
         provider: llmProvider,
         veilStateManager: veilState
@@ -368,6 +368,12 @@ class SignalApplication implements ConnectomeApplication {
     const contextTransform = new FocusedContextTransform({});
     await contextTransform.mount(space);
 
+    // Add speaker prefix receptor (prepends bot name to agent speech content)
+    // This allows other bots to identify who said what in conversation history
+    const speakerPrefixReceptor = new SpeakerPrefixReceptor();
+    (speakerPrefixReceptor as any).element = space;
+    space.addReceptor(speakerPrefixReceptor);
+
     console.log(`\n✅ ${CONFIG.bots.length} Signal bots initialized\n`);
     console.log('Listening for Signal messages...\n');
   }
@@ -396,6 +402,19 @@ class SignalApplication implements ConnectomeApplication {
 
   async onRestore(space: Space, veilState: VEILStateManager): Promise<void> {
     console.log('♻️  Signal bots restored from snapshot\n');
+
+    // Mount transforms and maintainers (these don't persist)
+    const activeStreamTransform = new ActiveStreamTransform();
+    await activeStreamTransform.mount(space);
+
+    const contextTransform = new FocusedContextTransform({});
+    await contextTransform.mount(space);
+
+    const speakerPrefixReceptor = new SpeakerPrefixReceptor();
+    (speakerPrefixReceptor as any).element = space;
+    space.addReceptor(speakerPrefixReceptor);
+
+    console.log('✓ Mounted transforms and receptors');
 
     // Reconnect all afferents
     for (const botElem of space.children) {

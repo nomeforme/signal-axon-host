@@ -21,10 +21,10 @@ import {
   AnthropicProvider,
   BasicAgent,
   AgentEffector,
-  ContextTransform,
   ElementRequestReceptor,
   ElementTreeMaintainer
 } from 'connectome-ts';
+import { FocusedContextTransform } from './focused-context-transform.js';
 import { ActiveStreamTransform } from 'connectome-ts/dist/transforms/active-stream-transform.js';
 import { ActionEffector } from 'connectome-ts/dist/spaces/action-effector.js';
 import type { ConnectomeApplication } from 'connectome-ts';
@@ -363,8 +363,9 @@ class SignalApplication implements ConnectomeApplication {
     const activeStreamTransform = new ActiveStreamTransform();
     await activeStreamTransform.mount(space);
 
-    // Add context transform (builds HUD context for agents)
-    const contextTransform = new ContextTransform({});
+    // Add focused context transform (builds HUD context for agents, filtering by stream)
+    // This ensures DM context is separate from group chat context
+    const contextTransform = new FocusedContextTransform({});
     await contextTransform.mount(space);
 
     console.log(`\n✅ ${CONFIG.bots.length} Signal bots initialized\n`);

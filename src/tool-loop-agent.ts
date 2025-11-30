@@ -117,6 +117,19 @@ export class ToolLoopAgent {
 
     console.log(`[ToolLoopAgent] Starting cycle with ${toolSchemas.length} tools`);
 
+    // When using tools, we can't have an assistant prefill message at the end
+    // The HUD may add one for <my_turn> formatting - strip it if present
+    let messages = [...context.messages];
+    if (hasTools && messages.length > 0) {
+      const lastMsg = messages[messages.length - 1];
+      console.log(`[ToolLoopAgent] Last message role: ${lastMsg.role}, content preview: "${lastMsg.content.substring(0, 50)}..."`);
+      if (lastMsg.role === 'assistant') {
+        // Strip any assistant message at the end when using tools - API doesn't support prefill with tools
+        console.log(`[ToolLoopAgent] Removing trailing assistant message for tool compatibility`);
+        messages = messages.slice(0, -1);
+      }
+    }
+
     const options: ToolLLMOptions = {
       maxTokens: this.config.defaultMaxTokens || 4096,
       temperature: this.config.defaultTemperature || 1.0,
@@ -124,7 +137,7 @@ export class ToolLoopAgent {
     };
 
     // Initial LLM call
-    let response = await this.provider.generate(context.messages, options);
+    let response = await this.provider.generate(messages, options);
     let totalTokens = response.tokensUsed || 0;
     let toolRounds = 0;
     let allContent = response.content;

@@ -327,7 +327,8 @@ class SignalApplication implements ConnectomeApplication {
             console.log(`  ↻ Re-processing ${pending.length} pending message(s) for [${botPhone}]`);
             for (const msgPayload of pending) {
               // Update the botPhone in the payload to match the reconnected bot
-              const updatedPayload = { ...msgPayload, botPhone };
+              // Add __reprocessed flag to bypass deduplication in SignalAfferent
+              const updatedPayload = { ...msgPayload, botPhone, __reprocessed: true };
               // Re-emit the message event so it gets processed by receptors
               space.emit({
                 topic: 'signal:message',

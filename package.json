@@ -21,9 +21,11 @@
   "dependencies": {
     "connectome-ts": "file:../connectome-ts",
     "signal-axon": "file:../signal-axon",
+    "@anthropic-ai/sdk": "^0.52.0",
     "dotenv": "^16.3.1",
     "axios": "^1.6.0",
-    "aws-sdk": "^2.1692.0"
+    "aws-sdk": "^2.1692.0",
+    "node-fetch": "^3.3.0"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",

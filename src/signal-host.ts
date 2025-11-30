@@ -26,9 +26,11 @@ import {
 } from 'connectome-ts';
 import { FocusedContextTransform } from './focused-context-transform.js';
 import { SpeakerPrefixReceptor } from './speaker-prefix-receptor.js';
+import { AnthropicToolProvider } from './anthropic-tool-provider.js';
 import { BedrockProvider } from './bedrock-provider.js';
+import { ToolLoopAgent, createFetchTool } from './tool-loop-agent.js';
+import { ToolAgentEffector } from './tool-agent-effector.js';
 import { ActiveStreamTransform } from 'connectome-ts/dist/transforms/active-stream-transform.js';
-import { ActionEffector } from 'connectome-ts/dist/spaces/action-effector.js';
 import type { ConnectomeApplication } from 'connectome-ts';
 import type { AfferentContext } from 'connectome-ts';
 import {
@@ -43,7 +45,7 @@ import {
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { ToolsComponent } from './tools-component.js';
+// Note: ToolsComponent is no longer used - tools are now handled natively by ToolLoopAgent
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -219,14 +221,8 @@ class SignalApplication implements ConnectomeApplication {
       console.log(`✓ Started afferent for ${botElem.name}`);
     }
 
-    // Create tools element (shared by all agents)
-    // Following Connectome pattern: tools are element-bound actions
-    const toolsElement = new Element('tools');
-    toolsElement.addComponent(new ToolsComponent());
-    space.addChild(toolsElement);
-    console.log('✓ Created tools element with ToolsComponent');
-
     // Create agent elements (one per bot) with per-bot LLM providers
+    // Using ToolLoopAgent with native tool support for proper tool execution
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
       throw new Error('ANTHROPIC_API_KEY environment variable is required');
@@ -238,6 +234,9 @@ class SignalApplication implements ConnectomeApplication {
       console.warn('⚠ AWS credentials not found - Bedrock models will not be available');
     }
 
+    // Create fetch tool (shared definition for all agents)
+    const fetchTool = createFetchTool();
+
     for (let i = 0; i < Math.min(botPhones.length, CONFIG.bots.length); i++) {
       const bot = CONFIG.bots[i];
       const botPhone = botPhones[i];
@@ -246,7 +245,7 @@ class SignalApplication implements ConnectomeApplication {
       const modelName = bot.model || CONFIG.default_model || 'claude-sonnet-4-0';
       const isBedrock = modelName.startsWith('bedrock-');
 
-      let botLlmProvider;
+      let botLlmProvider: AnthropicToolProvider | BedrockProvider;
       if (isBedrock) {
         if (!hasAwsCredentials) {
           console.error(`✗ Skipping ${bot.name}: Bedrock model requires AWS credentials`);
@@ -258,7 +257,7 @@ class SignalApplication implements ConnectomeApplication {
         });
         console.log(`  Using Bedrock provider for ${bot.name} with model: ${modelName}`);
       } else {
-        botLlmProvider = new AnthropicProvider({
+        botLlmProvider = new AnthropicToolProvider({
           apiKey,
           defaultModel: modelName,
           defaultMaxTokens: 4096
@@ -266,39 +265,36 @@ class SignalApplication implements ConnectomeApplication {
         console.log(`  Using Anthropic provider for ${bot.name} with model: ${modelName}`);
       }
 
-      // Create agent element using Element constructor and addChild
+      // Create agent element
       const agentElem = new Element(`agent-${bot.name}`);
       space.addChild(agentElem);
 
-      // Create agent with bot-specific config
-      // Tools are discovered from VEIL action-definition facets (Connectome pattern)
-      const agent = new BasicAgent({
-        config: {
-          name: bot.name,
-          systemPrompt: `You are in a Signal group chat. Your username in this conversation is ${bot.name}. You can mention other participants with @username.`
-        },
-        provider: botLlmProvider,
-        veilStateManager: veilState
-      });
+      // Build tools list based on bot config
+      const agentTools = [];
+      if (bot.tools?.includes('fetch')) {
+        agentTools.push(fetchTool);
+      }
 
-      // Add agent effector
-      // AgentEffector has no constructor params in current implementation
-      // But the example uses (element, agent) pattern - use Object.assign workaround
-      const effector = Object.assign(new AgentEffector(), {
-        agentElementId: agentElem.id,
-        agent: agent
-      });
+      // Create ToolLoopAgent with native tool support
+      const agent = new ToolLoopAgent(
+        {
+          name: bot.name,
+          systemPrompt: `You are in a Signal group chat. Your username in this conversation is ${bot.name}. You can mention other participants with @username.`,
+          defaultMaxTokens: 4096,
+          maxToolRounds: 5,
+          tools: agentTools
+        },
+        botLlmProvider,
+        veilState
+      );
+
+      // Add ToolAgentEffector instead of AgentEffector
+      const effector = new ToolAgentEffector(agent, bot.name);
       (effector as any).element = space;
       space.addEffector(effector);
 
-      console.log(`✓ Created agent: ${bot.name}`);
+      console.log(`✓ Created agent: ${bot.name} with ${agentTools.length} tool(s)`);
     }
-
-    // Add ActionEffector to route action facets to element handlers
-    const actionEffector = new ActionEffector();
-    (actionEffector as any).element = space;
-    space.addEffector(actionEffector);
-    console.log('✓ Added ActionEffector for tool execution');
 
     // Add shared receptors AFTER agents are created
     const messageReceptor = new SignalMessageReceptor({
@@ -516,8 +512,8 @@ async function main() {
   }
   console.log();
 
-  // Create LLM provider
-  const llmProvider = new AnthropicProvider({
+  // Create LLM provider (used by host for any fallback purposes)
+  const llmProvider = new AnthropicToolProvider({
     apiKey,
     defaultMaxTokens: 4000
   });

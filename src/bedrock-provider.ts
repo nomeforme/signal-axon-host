@@ -1,7 +1,8 @@
 /**
- * AWS Bedrock LLM Provider
+ * AWS Bedrock LLM Provider with Native Tool Support
  *
  * Implements the LLMProvider interface for AWS Bedrock's Claude models.
+ * Supports native tool calling via the Bedrock converse API.
  */
 
 import AWS from 'aws-sdk';
@@ -11,6 +12,7 @@ import type {
   LLMOptions,
   LLMResponse
 } from 'connectome-ts/dist/llm/llm-interface.js';
+import type { ToolSchema, ToolLLMOptions, ToolLLMResponse } from './anthropic-tool-provider.js';
 
 export interface BedrockProviderConfig {
   region?: string;
@@ -58,7 +60,7 @@ export class BedrockProvider implements LLMProvider {
     return `anthropic.${baseModel}-v1:0`;
   }
 
-  async generate(messages: LLMMessage[], options?: LLMOptions): Promise<LLMResponse> {
+  async generate(messages: LLMMessage[], options?: ToolLLMOptions): Promise<ToolLLMResponse> {
     // Filter out cache markers and system messages
     const apiMessages = messages.filter(m => m.role !== 'cache');
 
@@ -104,9 +106,15 @@ export class BedrockProvider implements LLMProvider {
       bedrockBody.temperature = options.temperature;
     }
 
+    // Add tools if provided
+    if (options?.tools && options.tools.length > 0) {
+      bedrockBody.tools = options.tools;
+    }
+
     console.log('[BedrockProvider:generate] Starting request...');
     console.log('[BedrockProvider:generate] Model ID:', bedrockModelId);
     console.log('[BedrockProvider:generate] Message count:', bedrockMessages.length);
+    console.log('[BedrockProvider:generate] Tools:', options?.tools?.map(t => t.name).join(', ') || 'none');
 
     // Retry logic
     let lastError: any;
@@ -126,19 +134,34 @@ export class BedrockProvider implements LLMProvider {
         const response = await this.client.invokeModel(params).promise();
         const responseBody = JSON.parse(response.body?.toString() || '{}');
 
+        // Store raw content blocks for tool result continuation
+        this._lastResponseContent = responseBody.content;
+
         // Extract text content
-        const content = responseBody.content
+        const textContent = responseBody.content
           ?.filter((block: any) => block.type === 'text')
           ?.map((block: any) => block.text)
           ?.join('') || '';
 
-        console.log('[BedrockProvider:generate] Response length:', content.length);
+        // Extract tool use blocks
+        const toolCalls = responseBody.content
+          ?.filter((block: any) => block.type === 'tool_use')
+          ?.map((block: any) => ({
+            id: block.id,
+            name: block.name,
+            input: block.input
+          })) || [];
+
+        console.log('[BedrockProvider:generate] Response length:', textContent.length);
         console.log('[BedrockProvider:generate] Stop reason:', responseBody.stop_reason);
+        console.log('[BedrockProvider:generate] Tool calls:', toolCalls.length);
 
         return {
-          content,
+          content: textContent,
           tokensUsed: (responseBody.usage?.input_tokens || 0) + (responseBody.usage?.output_tokens || 0),
-          modelId: bedrockModelId
+          modelId: bedrockModelId,
+          stopReason: responseBody.stop_reason as ToolLLMResponse['stopReason'],
+          toolCalls: toolCalls.length > 0 ? toolCalls : undefined
         };
       } catch (error: any) {
         lastError = error;
@@ -160,6 +183,113 @@ export class BedrockProvider implements LLMProvider {
 
     throw new Error(`Bedrock API error: ${lastError?.message || 'Unknown error'}`);
   }
+
+  /**
+   * Send tool results back to the API and get the next response
+   */
+  async sendToolResults(
+    messages: LLMMessage[],
+    assistantContent: any[],
+    toolResults: Array<{ tool_use_id: string; content: string }>,
+    options?: ToolLLMOptions
+  ): Promise<ToolLLMResponse> {
+    const apiMessages = messages.filter(m => m.role !== 'cache');
+    const systemMessage = apiMessages.find(m => m.role === 'system')?.content || '';
+    const conversationMessages = apiMessages.filter(m => m.role !== 'system');
+
+    // Build base messages
+    const bedrockMessages = this.mergeConsecutiveMessages(
+      conversationMessages.map(msg => ({
+        role: msg.role as 'user' | 'assistant',
+        content: this.formatContent(msg)
+      }))
+    );
+
+    // Add the assistant message with tool use
+    bedrockMessages.push({
+      role: 'assistant',
+      content: assistantContent
+    });
+
+    // Add tool results as user message
+    bedrockMessages.push({
+      role: 'user',
+      content: toolResults.map(tr => ({
+        type: 'tool_result',
+        tool_use_id: tr.tool_use_id,
+        content: tr.content
+      }))
+    });
+
+    const modelId = options?.modelId || this.defaultModel;
+    const bedrockModelId = this.getBedrockModelId(modelId);
+
+    const bedrockBody: any = {
+      anthropic_version: 'bedrock-2023-05-31',
+      max_tokens: options?.maxTokens || this.defaultMaxTokens,
+      messages: bedrockMessages
+    };
+
+    if (systemMessage) {
+      bedrockBody.system = systemMessage;
+    }
+
+    if (options?.temperature !== undefined) {
+      bedrockBody.temperature = options.temperature;
+    }
+
+    if (options?.tools && options.tools.length > 0) {
+      bedrockBody.tools = options.tools;
+    }
+
+    console.log('[BedrockProvider:sendToolResults] Sending tool results...');
+    console.log('[BedrockProvider:sendToolResults] Tool results count:', toolResults.length);
+
+    const params = {
+      modelId: bedrockModelId,
+      body: JSON.stringify(bedrockBody),
+      contentType: 'application/json',
+      accept: 'application/json'
+    };
+
+    const response = await this.client.invokeModel(params).promise();
+    const responseBody = JSON.parse(response.body?.toString() || '{}');
+
+    this._lastResponseContent = responseBody.content;
+
+    const textContent = responseBody.content
+      ?.filter((block: any) => block.type === 'text')
+      ?.map((block: any) => block.text)
+      ?.join('') || '';
+
+    const toolCalls = responseBody.content
+      ?.filter((block: any) => block.type === 'tool_use')
+      ?.map((block: any) => ({
+        id: block.id,
+        name: block.name,
+        input: block.input
+      })) || [];
+
+    console.log('[BedrockProvider:sendToolResults] Stop reason:', responseBody.stop_reason);
+    console.log('[BedrockProvider:sendToolResults] New tool calls:', toolCalls.length);
+
+    return {
+      content: textContent,
+      tokensUsed: (responseBody.usage?.input_tokens || 0) + (responseBody.usage?.output_tokens || 0),
+      modelId: bedrockModelId,
+      stopReason: responseBody.stop_reason as ToolLLMResponse['stopReason'],
+      toolCalls: toolCalls.length > 0 ? toolCalls : undefined
+    };
+  }
+
+  /**
+   * Get the raw content blocks from the last response for tool result continuation
+   */
+  getLastResponseContent(): any[] | undefined {
+    return this._lastResponseContent;
+  }
+
+  private _lastResponseContent?: any[];
 
   /**
    * Format message content for Bedrock API
@@ -279,11 +409,13 @@ export class BedrockProvider implements LLMProvider {
     supportsPrefill: boolean;
     supportsCaching: boolean;
     maxContextLength?: number;
+    supportsTools?: boolean;
   } {
     return {
       supportsPrefill: true,
       supportsCaching: false,
-      maxContextLength: 200000
+      maxContextLength: 200000,
+      supportsTools: true
     };
   }
 }

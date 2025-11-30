@@ -75,12 +75,15 @@ export class FocusedContextTransform extends BaseTransform {
           // If no focused stream specified, include everything
           if (!focusedStreamId) return true;
 
-          // Include very early setup frames (initialization)
-          if (frame.sequence <= FocusedContextTransform.SETUP_FRAME_LIMIT) return true;
-
-          // If frame has a stream, it must match
+          // If frame has a stream, it must match (even for early setup frames)
           if (frame.activeStream?.streamId) {
             return frame.activeStream.streamId === focusedStreamId;
+          }
+
+          // Include very early setup frames ONLY if they don't have a stream
+          // (pure initialization frames with no conversation content)
+          if (frame.sequence <= FocusedContextTransform.SETUP_FRAME_LIMIT) {
+            return true;
           }
 
           // Check if frame contains any facets for the focused stream

@@ -118,15 +118,21 @@ export class ToolLoopAgent {
     console.log(`[ToolLoopAgent] Starting cycle with ${toolSchemas.length} tools`);
 
     // When using tools, we can't have an assistant prefill message at the end
-    // The HUD may add one for <my_turn> formatting - strip it if present
+    // The HUD may add one for <my_turn> formatting - strip ALL trailing assistant messages
     let messages = [...context.messages];
-    if (hasTools && messages.length > 0) {
-      const lastMsg = messages[messages.length - 1];
-      console.log(`[ToolLoopAgent] Last message role: ${lastMsg.role}, content preview: "${lastMsg.content.substring(0, 50)}..."`);
-      if (lastMsg.role === 'assistant') {
-        // Strip any assistant message at the end when using tools - API doesn't support prefill with tools
-        console.log(`[ToolLoopAgent] Removing trailing assistant message for tool compatibility`);
+    if (hasTools) {
+      let removedCount = 0;
+      while (messages.length > 0 && messages[messages.length - 1].role === 'assistant') {
+        const lastMsg = messages[messages.length - 1];
+        console.log(`[ToolLoopAgent] Removing trailing assistant message for tool compatibility: "${lastMsg.content.substring(0, 30)}..."`);
         messages = messages.slice(0, -1);
+        removedCount++;
+      }
+      if (removedCount > 0) {
+        console.log(`[ToolLoopAgent] Removed ${removedCount} trailing assistant message(s)`);
+      }
+      if (messages.length > 0) {
+        console.log(`[ToolLoopAgent] Final last message role: ${messages[messages.length - 1].role}`);
       }
     }
 

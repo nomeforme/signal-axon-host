@@ -26,6 +26,7 @@ import {
 } from 'connectome-ts';
 import { FocusedContextTransform } from './focused-context-transform.js';
 import { SpeakerPrefixReceptor } from './speaker-prefix-receptor.js';
+import { BedrockProvider } from './bedrock-provider.js';
 import { ActiveStreamTransform } from 'connectome-ts/dist/transforms/active-stream-transform.js';
 import { ActionEffector } from 'connectome-ts/dist/spaces/action-effector.js';
 import type { ConnectomeApplication } from 'connectome-ts';
@@ -225,15 +226,45 @@ class SignalApplication implements ConnectomeApplication {
     space.addChild(toolsElement);
     console.log('✓ Created tools element with ToolsComponent');
 
-    // Create agent elements (one per bot)
-    const llmProvider = (space as any).getReference?.('provider:llm.primary');
-    if (!llmProvider) {
-      throw new Error('No LLM provider found in space references!');
+    // Create agent elements (one per bot) with per-bot LLM providers
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      throw new Error('ANTHROPIC_API_KEY environment variable is required');
+    }
+
+    // Check for AWS credentials for Bedrock models
+    const hasAwsCredentials = !!(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY);
+    if (!hasAwsCredentials) {
+      console.warn('⚠ AWS credentials not found - Bedrock models will not be available');
     }
 
     for (let i = 0; i < Math.min(botPhones.length, CONFIG.bots.length); i++) {
       const bot = CONFIG.bots[i];
       const botPhone = botPhones[i];
+
+      // Create per-bot LLM provider with the correct model
+      const modelName = bot.model || CONFIG.default_model || 'claude-sonnet-4-0';
+      const isBedrock = modelName.startsWith('bedrock-');
+
+      let botLlmProvider;
+      if (isBedrock) {
+        if (!hasAwsCredentials) {
+          console.error(`✗ Skipping ${bot.name}: Bedrock model requires AWS credentials`);
+          continue;
+        }
+        botLlmProvider = new BedrockProvider({
+          defaultModel: modelName,
+          defaultMaxTokens: 4096
+        });
+        console.log(`  Using Bedrock provider for ${bot.name} with model: ${modelName}`);
+      } else {
+        botLlmProvider = new AnthropicProvider({
+          apiKey,
+          defaultModel: modelName,
+          defaultMaxTokens: 4096
+        });
+        console.log(`  Using Anthropic provider for ${bot.name} with model: ${modelName}`);
+      }
 
       // Create agent element using Element constructor and addChild
       const agentElem = new Element(`agent-${bot.name}`);
@@ -246,7 +277,7 @@ class SignalApplication implements ConnectomeApplication {
           name: bot.name,
           systemPrompt: `You are in a Signal group chat. Your username in this conversation is ${bot.name}. You can mention other participants with @username.`
         },
-        provider: llmProvider,
+        provider: botLlmProvider,
         veilStateManager: veilState
       });
 

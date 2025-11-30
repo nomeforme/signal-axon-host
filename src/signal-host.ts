@@ -69,6 +69,7 @@ interface SignalConfig {
   default_system_instruction?: string;
   random_reply_chance?: number;
   max_bot_mentions_per_conversation?: number;
+  max_conversation_frames?: number;
 }
 
 let CONFIG: SignalConfig;
@@ -389,7 +390,18 @@ class SignalApplication implements ConnectomeApplication {
     (speechEffector as any).element = space;
     space.addEffector(speechEffector);
 
-    // Add command effector for !rr, !bb, !help commands
+    // Add active stream transform (reads streamId from event payload and sets frame.activeStream)
+    const activeStreamTransform = new ActiveStreamTransform();
+    await activeStreamTransform.mount(space);
+
+    // Add focused context transform (builds HUD context for agents, filtering by stream)
+    // This ensures DM context is separate from group chat context
+    const contextTransform = new FocusedContextTransform({
+      maxConversationFrames: CONFIG.max_conversation_frames
+    });
+    await contextTransform.mount(space);
+
+    // Add command effector for !rr, !bb, !mf, !help commands
     const commandEffector = new SignalCommandEffector(
       {
         apiUrl: process.env.HTTP_BASE_URL || 'http://localhost:8080',
@@ -398,20 +410,15 @@ class SignalApplication implements ConnectomeApplication {
       (updates) => {
         // Update the message receptor config at runtime
         messageReceptor.updateConfig(updates);
+        // Update context transform if maxConversationFrames changed
+        if (updates.maxConversationFrames !== undefined) {
+          contextTransform.setMaxConversationFrames(updates.maxConversationFrames);
+        }
         console.log('[SignalHost] Config updated via command:', updates);
       }
     );
     (commandEffector as any).element = space;
     space.addEffector(commandEffector);
-
-    // Add active stream transform (reads streamId from event payload and sets frame.activeStream)
-    const activeStreamTransform = new ActiveStreamTransform();
-    await activeStreamTransform.mount(space);
-
-    // Add focused context transform (builds HUD context for agents, filtering by stream)
-    // This ensures DM context is separate from group chat context
-    const contextTransform = new FocusedContextTransform({});
-    await contextTransform.mount(space);
 
     // Add speaker prefix receptor (prepends bot name to agent speech content)
     // This allows other bots to identify who said what in conversation history
@@ -452,7 +459,9 @@ class SignalApplication implements ConnectomeApplication {
     const activeStreamTransform = new ActiveStreamTransform();
     await activeStreamTransform.mount(space);
 
-    const contextTransform = new FocusedContextTransform({});
+    const contextTransform = new FocusedContextTransform({
+      maxConversationFrames: CONFIG.max_conversation_frames
+    });
     await contextTransform.mount(space);
 
     const speakerPrefixReceptor = new SpeakerPrefixReceptor();
@@ -634,6 +643,10 @@ class SignalApplication implements ConnectomeApplication {
       },
       (updates) => {
         messageReceptor.updateConfig(updates);
+        // Update context transform if maxConversationFrames changed
+        if (updates.maxConversationFrames !== undefined) {
+          contextTransform.setMaxConversationFrames(updates.maxConversationFrames);
+        }
         console.log('[SignalHost] Config updated via command:', updates);
       }
     );

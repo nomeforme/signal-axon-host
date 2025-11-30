@@ -19,6 +19,13 @@ function hasStateAspect(facet: Facet): facet is Facet & { state: Record<string, 
   return 'state' in facet && facet.state !== null && typeof facet.state === 'object';
 }
 
+export interface FocusedContextTransformConfig {
+  defaultOptions?: Partial<HUDConfig>;
+  // Maximum conversation frames to include (excluding setup frames)
+  // Default: 8000 (~4000 messages, ~80k tokens for 200k context window)
+  maxConversationFrames?: number;
+}
+
 export class FocusedContextTransform extends BaseTransform {
   // Priority: Run after compression (which has priority 10)
   priority = 100;
@@ -26,13 +33,29 @@ export class FocusedContextTransform extends BaseTransform {
   // Number of initial setup frames to always include regardless of stream
   private static readonly SETUP_FRAME_LIMIT = 5;
 
+  // Default max conversation frames (can be overridden via config)
+  private static readonly DEFAULT_MAX_CONVERSATION_FRAMES = 8000;
+
   private hud: FrameTrackingHUD;
   private defaultOptions?: Partial<HUDConfig>;
+  private _maxConversationFrames: number;
 
-  constructor(config: { defaultOptions?: Partial<HUDConfig> } = {}) {
+  constructor(config: FocusedContextTransformConfig = {}) {
     super();
     this.defaultOptions = config.defaultOptions;
+    this._maxConversationFrames = config.maxConversationFrames ?? FocusedContextTransform.DEFAULT_MAX_CONVERSATION_FRAMES;
     this.hud = new FrameTrackingHUD();
+  }
+
+  /** Get current max conversation frames setting */
+  get maxConversationFrames(): number {
+    return this._maxConversationFrames;
+  }
+
+  /** Update max conversation frames at runtime (via !mf command) */
+  setMaxConversationFrames(value: number): void {
+    this._maxConversationFrames = value;
+    console.log(`[FocusedContextTransform] maxConversationFrames updated to ${value}`);
   }
 
   process(state: ReadonlyVEILState): VEILDelta[] {
@@ -100,10 +123,32 @@ export class FocusedContextTransform extends BaseTransform {
           return false;
         });
 
+        console.log(`[FocusedContextTransform] Filtered ${fullState.frameHistory.length} frames to ${filteredFrames.length} for stream ${focusedStreamId}`);
+
+        // FRAME CLIPPING: Apply rolling window to prevent context overflow
+        // Separate setup frames (always keep) from conversation frames (clip to max)
+        const setupFrames = filteredFrames.filter((f: any) =>
+          f.sequence <= FocusedContextTransform.SETUP_FRAME_LIMIT && !f.activeStream?.streamId
+        );
+        const conversationFrames = filteredFrames.filter((f: any) =>
+          f.sequence > FocusedContextTransform.SETUP_FRAME_LIMIT || f.activeStream?.streamId
+        );
+
+        // Clip conversation frames to most recent N
+        let clippedConversationFrames = conversationFrames;
+        if (conversationFrames.length > this.maxConversationFrames) {
+          const clippedCount = conversationFrames.length - this.maxConversationFrames;
+          clippedConversationFrames = conversationFrames.slice(-this.maxConversationFrames);
+          console.log(`[FocusedContextTransform] Clipped ${clippedCount} oldest conversation frames (keeping ${this.maxConversationFrames})`);
+        }
+
+        // Combine: setup frames + clipped conversation frames
+        const clippedFrames = [...setupFrames, ...clippedConversationFrames];
+
         // Add current frame if it matches
-        const allFrames = [...filteredFrames];
+        const allFrames = [...clippedFrames];
         if (currentFrame) {
-          const isAlreadyInHistory = filteredFrames.some((f: any) => f.sequence === currentFrame.sequence);
+          const isAlreadyInHistory = clippedFrames.some((f: any) => f.sequence === currentFrame.sequence);
           if (!isAlreadyInHistory) {
             // Only add current frame if it matches focused stream or has no stream
             if (!currentFrame.activeStream?.streamId ||
@@ -113,8 +158,6 @@ export class FocusedContextTransform extends BaseTransform {
             }
           }
         }
-
-        console.log(`[FocusedContextTransform] Filtered ${fullState.frameHistory.length} frames to ${filteredFrames.length} for stream ${focusedStreamId}`);
 
         // Get bot name from targetAgent (set by SignalMessageReceptor)
         const botName = activationState.targetAgent;

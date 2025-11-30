@@ -102,5 +102,6 @@
   "lora_path_to_url": {},
   "prompt_replace_dict": {},
   "random_reply_chance": 200,
-  "max_bot_mentions_per_conversation": 1
+  "max_bot_mentions_per_conversation": 1,
+  "max_conversation_frames": 8000
 }

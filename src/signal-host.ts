@@ -36,6 +36,7 @@ import {
   SignalReceiptReceptor,
   SignalTypingReceptor,
   SignalSpeechEffector,
+  SignalCommandEffector,
   MessageConsistencyReceptor
 } from 'signal-axon';
 import { readFileSync } from 'fs';
@@ -359,6 +360,21 @@ class SignalApplication implements ConnectomeApplication {
     });
     (speechEffector as any).element = space;
     space.addEffector(speechEffector);
+
+    // Add command effector for !rr, !bb, !help commands
+    const commandEffector = new SignalCommandEffector(
+      {
+        apiUrl: process.env.HTTP_BASE_URL || 'http://localhost:8080',
+        botNames
+      },
+      (updates) => {
+        // Update the message receptor config at runtime
+        messageReceptor.updateConfig(updates);
+        console.log('[SignalHost] Config updated via command:', updates);
+      }
+    );
+    (commandEffector as any).element = space;
+    space.addEffector(commandEffector);
 
     // Add active stream transform (reads streamId from event payload and sets frame.activeStream)
     const activeStreamTransform = new ActiveStreamTransform();

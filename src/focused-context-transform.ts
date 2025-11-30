@@ -128,6 +128,9 @@ Signal supports these text formatting options:
           : activationState.systemPrompt || this.defaultOptions?.systemPrompt;
 
         // Build agent options
+        // NOTE: Don't use formatConfig here - the HUD's renderAgentFrameAsChunks already
+        // adds <my_turn> tags around assistant content. Adding formatConfig causes
+        // double-wrapping which confuses the model and causes empty responses.
         const agentOptions: HUDConfig = {
           ...this.defaultOptions,
           systemPrompt,
@@ -136,13 +139,7 @@ Signal supports these text formatting options:
           renderContext: {
             ...this.defaultOptions?.renderContext,
             focusedStream: focusedStreamId
-          },
-          formatConfig: botName ? {
-            assistant: {
-              prefix: '<my_turn>\n',
-              suffix: '\n</my_turn>'
-            }
-          } : undefined
+          }
         };
 
         // Render context with filtered frames

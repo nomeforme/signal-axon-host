@@ -54,8 +54,13 @@ export class SpeakerPrefixReceptor extends BaseReceptor {
       console.log(`[SpeakerPrefixReceptor] Stripped tags from content`);
     }
 
-    // Skip if content already has this agent's prefix
+    // Check if content already has this agent's prefix
     if (content.startsWith(`${agentName}: `)) {
+      // Still need to update facet.content with stripped version (without tags)
+      if (originalContent !== content) {
+        facet.content = content;
+        console.log(`[SpeakerPrefixReceptor] Updated facet with stripped content (prefix already present)`);
+      }
       return [];
     }
 

@@ -130,20 +130,9 @@ export class ToolAgentEffector extends BaseEffector {
           }
         }
 
-        // Remove the activation facet
-        this.element.emit({
-          topic: 'veil:operation',
-          source: this.element.getRef(),
-          timestamp: Date.now(),
-          payload: {
-            operation: {
-              type: 'removeFacet',
-              id: activationId
-            }
-          }
-        });
-
-        console.log(`[ToolAgentEffector:${this.agentName}] Cycle complete, activation removed`);
+        // Note: We do NOT remove the activation facet - it stays in state to prevent
+        // duplicate activations from re-processed messages (consistency checker)
+        console.log(`[ToolAgentEffector:${this.agentName}] Cycle complete`);
 
       } catch (error) {
         console.error(`[ToolAgentEffector:${this.agentName}] Agent cycle error:`, error);

@@ -81,9 +81,10 @@ try {
 }
 
 class SignalApplication implements ConnectomeApplication {
-  async createSpace(hostRegistry?: Map<string, any>): Promise<{ space: Space; veilState: VEILStateManager }> {
+  async createSpace(hostRegistry?: Map<string, any>, lifecycleId?: string, spaceId?: string): Promise<{ space: Space; veilState: VEILStateManager }> {
     const veilState = new VEILStateManager();
-    const space = new Space(veilState, hostRegistry);
+    // Pass lifecycleId and spaceId for restoration - this preserves element IDs across restarts
+    const space = new Space(veilState, hostRegistry, lifecycleId, spaceId);
     return { space, veilState };
   }
 
@@ -460,11 +461,75 @@ class SignalApplication implements ConnectomeApplication {
 
     console.log('✓ Mounted transforms and receptors');
 
-    // Reconnect all afferents
+    // Rebuild bot mappings from environment
+    const botPhoneNumbersEnv = process.env.BOT_PHONE_NUMBERS || '';
+    const botPhones = botPhoneNumbersEnv.split(',').map(p => p.trim()).filter(p => p);
+
+    const botPhoneMap = new Map<string, string>();
+    const botUuids = new Map<string, string>();
+    const botNames = new Map<string, string>();
+
+    // Build name mappings first
+    for (let i = 0; i < CONFIG.bots.length && i < botPhones.length; i++) {
+      botPhoneMap.set(CONFIG.bots[i].name, botPhones[i]);
+      botNames.set(botPhones[i], CONFIG.bots[i].name);
+    }
+
+    // Load UUIDs from accounts.json (same as initialize)
+    const accountsPath = '/home/.local/share/signal-api/data/accounts.json';
+    try {
+      if (fs.existsSync(accountsPath)) {
+        const accountsData = JSON.parse(fs.readFileSync(accountsPath, 'utf8'));
+        const accounts = accountsData.accounts || [];
+
+        for (let i = 0; i < Math.min(botPhones.length, CONFIG.bots.length); i++) {
+          const bot = CONFIG.bots[i];
+          const botPhone = botPhones[i];
+          const account = accounts.find((acc: any) => acc.number === botPhone);
+          if (account?.uuid) {
+            botUuids.set(botPhone, account.uuid);
+            console.log(`  ${bot.name} (${botPhone}): ${account.uuid}`);
+          } else {
+            console.warn(`  Warning: No UUID found for ${bot.name} (${botPhone})`);
+          }
+        }
+      } else {
+        console.warn(`accounts.json not found at ${accountsPath}`);
+      }
+    } catch (error) {
+      console.error('Failed to load bot UUIDs:', error);
+    }
+
+    // Get API key for LLM providers
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      throw new Error('ANTHROPIC_API_KEY environment variable is required');
+    }
+
+    const hasAwsCredentials = !!(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY);
+    const fetchTool = createFetchTool();
+
+    // Reconnect all afferents AND create agents/effectors
     for (const botElem of space.children) {
       if (botElem.name.startsWith('bot-')) {
         const afferent = botElem.components[0] as SignalAfferent;
-        const config = (afferent as any).config || {}; // Access config property directly
+
+        // Extract bot name from element name (e.g., "bot-haiku-4-5" -> "haiku-4-5")
+        const botName = botElem.name.replace(/^bot-/, '');
+        const botPhone = botPhoneMap.get(botName);
+
+        if (!botPhone) {
+          console.warn(`[onRestore] No phone number found for ${botName}, skipping`);
+          continue;
+        }
+
+        // Rebuild afferent config from environment variables
+        const config = {
+          botPhone,
+          wsUrl: process.env.WS_BASE_URL || 'ws://localhost:8080',
+          httpUrl: process.env.HTTP_BASE_URL || 'http://localhost:8080',
+          maxReconnectTime: 5 * 60 * 1000
+        };
 
         const context: AfferentContext<any> = {
           config,
@@ -476,9 +541,106 @@ class SignalApplication implements ConnectomeApplication {
         await afferent.initialize(context);
         await afferent.start();
 
-        console.log(`✓ Reconnected ${botElem.name}`);
+        // Find bot config for this bot
+        const botConfig = CONFIG.bots.find(b => b.name === botName);
+        if (!botConfig) {
+          console.warn(`[onRestore] No config found for ${botName}`);
+          continue;
+        }
+
+        // Create LLM provider for this bot
+        const modelName = botConfig.model || CONFIG.default_model || 'claude-sonnet-4-0';
+        const isBedrock = modelName.startsWith('bedrock-');
+
+        let botLlmProvider: AnthropicToolProvider | BedrockProvider;
+        if (isBedrock) {
+          if (!hasAwsCredentials) {
+            console.warn(`[onRestore] Skipping ${botName}: Bedrock requires AWS credentials`);
+            continue;
+          }
+          botLlmProvider = new BedrockProvider({
+            defaultModel: modelName,
+            defaultMaxTokens: 4096
+          });
+        } else {
+          botLlmProvider = new AnthropicToolProvider({
+            apiKey,
+            defaultModel: modelName,
+            defaultMaxTokens: 4096
+          });
+        }
+
+        // Build tools list
+        const agentTools = [];
+        if (botConfig.tools?.includes('fetch')) {
+          agentTools.push(fetchTool);
+        }
+
+        // Create ToolLoopAgent
+        const agent = new ToolLoopAgent(
+          {
+            name: botName,
+            systemPrompt: `You are in a Signal group chat. Your username in this conversation is ${botName}. You can mention other participants with @username.`,
+            defaultMaxTokens: 4096,
+            maxToolRounds: 5,
+            tools: agentTools
+          },
+          botLlmProvider,
+          veilState
+        );
+
+        // Create and register effector
+        const effector = new ToolAgentEffector(agent, botName);
+        (effector as any).element = space;
+        space.addEffector(effector);
+
+        console.log(`✓ Reconnected ${botElem.name} (${botPhone}) with ${agentTools.length} tool(s)`);
       }
     }
+
+    // Create shared receptors
+    const messageReceptor = new SignalMessageReceptor({
+      botUuids,
+      botNames,
+      groupPrivacyMode: (CONFIG.group_privacy_mode || 'opt-in') as 'opt-in' | 'opt-out',
+      randomReplyChance: CONFIG.random_reply_chance || 0,
+      maxBotMentionsPerConversation: CONFIG.max_bot_mentions_per_conversation || 10
+    });
+    (messageReceptor as any).element = space;
+    space.addReceptor(messageReceptor);
+
+    const receiptReceptor = new SignalReceiptReceptor();
+    (receiptReceptor as any).element = space;
+    space.addReceptor(receiptReceptor);
+
+    const typingReceptor = new SignalTypingReceptor();
+    (typingReceptor as any).element = space;
+    space.addReceptor(typingReceptor);
+
+    // Create speech effector
+    const speechEffector = new SignalSpeechEffector({
+      apiUrl: process.env.HTTP_BASE_URL || 'http://localhost:8080',
+      botNames,
+      maxMessageLength: 400
+    });
+    (speechEffector as any).element = space;
+    space.addEffector(speechEffector);
+
+    // Create command effector
+    const commandEffector = new SignalCommandEffector(
+      {
+        apiUrl: process.env.HTTP_BASE_URL || 'http://localhost:8080',
+        botNames
+      },
+      (updates) => {
+        messageReceptor.updateConfig(updates);
+        console.log('[SignalHost] Config updated via command:', updates);
+      }
+    );
+    (commandEffector as any).element = space;
+    space.addEffector(commandEffector);
+
+    console.log('✓ Restored all receptors and effectors');
   }
 }
 

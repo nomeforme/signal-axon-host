@@ -29,7 +29,7 @@ import { SpeakerPrefixReceptor } from './speaker-prefix-receptor.js';
 import { AnthropicToolProvider } from './anthropic-tool-provider.js';
 import { BedrockProvider } from './bedrock-provider.js';
 import { ToolLoopAgent, createFetchTool } from './tool-loop-agent.js';
-import { ToolAgentEffector } from './tool-agent-effector.js';
+import { ToolAgentEffector, SignalErrorConfig } from './tool-agent-effector.js';
 import { ActiveStreamTransform } from 'connectome-ts/dist/transforms/active-stream-transform.js';
 import type { ConnectomeApplication } from 'connectome-ts';
 import type { AfferentContext } from 'connectome-ts';
@@ -291,7 +291,12 @@ class SignalApplication implements ConnectomeApplication {
       );
 
       // Add ToolAgentEffector instead of AgentEffector
-      const effector = new ToolAgentEffector(agent, bot.name);
+      // Pass Signal config so errors can be sent directly to Signal
+      const signalErrorConfig: SignalErrorConfig = {
+        apiUrl: process.env.HTTP_BASE_URL || 'http://localhost:8080',
+        botNames
+      };
+      const effector = new ToolAgentEffector(agent, bot.name, signalErrorConfig);
       (effector as any).element = space;
       space.addEffector(effector);
 
@@ -599,7 +604,12 @@ class SignalApplication implements ConnectomeApplication {
         );
 
         // Create and register effector
-        const effector = new ToolAgentEffector(agent, botName);
+        // Pass Signal config so errors can be sent directly to Signal
+        const signalErrorConfig: SignalErrorConfig = {
+          apiUrl: process.env.HTTP_BASE_URL || 'http://localhost:8080',
+          botNames
+        };
+        const effector = new ToolAgentEffector(agent, botName, signalErrorConfig);
         (effector as any).element = space;
         space.addEffector(effector);
 

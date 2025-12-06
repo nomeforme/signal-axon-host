@@ -21,9 +21,10 @@ function hasStateAspect(facet: Facet): facet is Facet & { state: Record<string, 
 
 export interface FocusedContextTransformConfig {
   defaultOptions?: Partial<HUDConfig>;
-  // Maximum conversation frames to include (excluding setup frames)
-  // Default: 8000 (~4000 messages, ~80k tokens for 200k context window)
-  maxConversationFrames?: number;
+  // Maximum frames to process (applied globally before filtering)
+  // Bounds processing time regardless of stream count
+  // Set via max_conversation_frames in config.json
+  maxConversationFrames: number;
 }
 
 export class FocusedContextTransform extends BaseTransform {
@@ -33,17 +34,14 @@ export class FocusedContextTransform extends BaseTransform {
   // Number of initial setup frames to always include regardless of stream
   private static readonly SETUP_FRAME_LIMIT = 5;
 
-  // Default max conversation frames (can be overridden via config)
-  private static readonly DEFAULT_MAX_CONVERSATION_FRAMES = 8000;
-
   private hud: FrameTrackingHUD;
   private defaultOptions?: Partial<HUDConfig>;
   private _maxConversationFrames: number;
 
-  constructor(config: FocusedContextTransformConfig = {}) {
+  constructor(config: FocusedContextTransformConfig) {
     super();
     this.defaultOptions = config.defaultOptions;
-    this._maxConversationFrames = config.maxConversationFrames ?? FocusedContextTransform.DEFAULT_MAX_CONVERSATION_FRAMES;
+    this._maxConversationFrames = config.maxConversationFrames;
     this.hud = new FrameTrackingHUD();
   }
 
@@ -92,9 +90,20 @@ export class FocusedContextTransform extends BaseTransform {
         // Get current frame from Space
         const currentFrame = space?.getCurrentFrame();
 
+        // PRE-CLIP: Limit total frames to process for bounded response times
+        // This is applied BEFORE filtering to ensure processing time has an upper bound
+        const maxFrames = this._maxConversationFrames;
+        const frameHistory = fullState.frameHistory.length > maxFrames
+          ? fullState.frameHistory.slice(-maxFrames)
+          : fullState.frameHistory;
+
+        if (fullState.frameHistory.length > maxFrames) {
+          console.log(`[FocusedContextTransform] Pre-clipped ${fullState.frameHistory.length} frames to ${maxFrames} for processing`);
+        }
+
         // FILTER FRAMES: Only include frames that match the focused stream
         // Be strict - exclude frames from other streams entirely
-        const filteredFrames = fullState.frameHistory.filter((frame: any) => {
+        const filteredFrames = frameHistory.filter((frame: any) => {
           // If no focused stream specified, include everything
           if (!focusedStreamId) return true;
 
@@ -123,32 +132,12 @@ export class FocusedContextTransform extends BaseTransform {
           return false;
         });
 
-        console.log(`[FocusedContextTransform] Filtered ${fullState.frameHistory.length} frames to ${filteredFrames.length} for stream ${focusedStreamId}`);
-
-        // FRAME CLIPPING: Apply rolling window to prevent context overflow
-        // Separate setup frames (always keep) from conversation frames (clip to max)
-        const setupFrames = filteredFrames.filter((f: any) =>
-          f.sequence <= FocusedContextTransform.SETUP_FRAME_LIMIT && !f.activeStream?.streamId
-        );
-        const conversationFrames = filteredFrames.filter((f: any) =>
-          f.sequence > FocusedContextTransform.SETUP_FRAME_LIMIT || f.activeStream?.streamId
-        );
-
-        // Clip conversation frames to most recent N
-        let clippedConversationFrames = conversationFrames;
-        if (conversationFrames.length > this.maxConversationFrames) {
-          const clippedCount = conversationFrames.length - this.maxConversationFrames;
-          clippedConversationFrames = conversationFrames.slice(-this.maxConversationFrames);
-          console.log(`[FocusedContextTransform] Clipped ${clippedCount} oldest conversation frames (keeping ${this.maxConversationFrames})`);
-        }
-
-        // Combine: setup frames + clipped conversation frames
-        const clippedFrames = [...setupFrames, ...clippedConversationFrames];
+        console.log(`[FocusedContextTransform] Filtered ${frameHistory.length} frames to ${filteredFrames.length} for stream ${focusedStreamId}`);
 
         // Add current frame if it matches
-        const allFrames = [...clippedFrames];
+        const allFrames = [...filteredFrames];
         if (currentFrame) {
-          const isAlreadyInHistory = clippedFrames.some((f: any) => f.sequence === currentFrame.sequence);
+          const isAlreadyInHistory = filteredFrames.some((f: any) => f.sequence === currentFrame.sequence);
           if (!isAlreadyInHistory) {
             // Only add current frame if it matches focused stream or has no stream
             if (!currentFrame.activeStream?.streamId ||

@@ -329,7 +329,9 @@ export class BedrockProvider implements LLMProvider {
   }
 
   /**
-   * Merge consecutive user messages (Bedrock requirement)
+   * Merge consecutive user messages and ensure proper message ordering (Bedrock requirement)
+   * - First message must be user role (required by Claude 3 Sonnet)
+   * - No consecutive messages of the same role
    */
   private mergeConsecutiveMessages(
     messages: Array<{ role: 'user' | 'assistant'; content: any }>
@@ -365,6 +367,11 @@ export class BedrockProvider implements LLMProvider {
         merged.push(current);
         i++;
       }
+    }
+
+    // Ensure first message is user role (required by Claude 3 Sonnet and some other models)
+    if (merged.length > 0 && merged[0].role === 'assistant') {
+      merged.unshift({ role: 'user', content: [{ type: 'text', text: '[conversation history]' }] });
     }
 
     return merged;

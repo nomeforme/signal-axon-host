@@ -69,7 +69,7 @@ interface SignalConfig {
   default_system_instruction?: string;
   random_reply_chance?: number;
   max_bot_mentions_per_conversation?: number;
-  max_conversation_frames?: number;
+  max_conversation_frames: number;
 }
 
 let CONFIG: SignalConfig;
@@ -309,7 +309,8 @@ class SignalApplication implements ConnectomeApplication {
       botNames,
       groupPrivacyMode: (CONFIG.group_privacy_mode || 'opt-in') as 'opt-in' | 'opt-out',
       randomReplyChance: CONFIG.random_reply_chance || 0,
-      maxBotMentionsPerConversation: CONFIG.max_bot_mentions_per_conversation || 10
+      maxBotMentionsPerConversation: CONFIG.max_bot_mentions_per_conversation || 10,
+      maxConversationFrames: CONFIG.max_conversation_frames
     });
     (messageReceptor as any).element = space;
     space.addReceptor(messageReceptor);
@@ -623,7 +624,8 @@ class SignalApplication implements ConnectomeApplication {
       botNames,
       groupPrivacyMode: (CONFIG.group_privacy_mode || 'opt-in') as 'opt-in' | 'opt-out',
       randomReplyChance: CONFIG.random_reply_chance || 0,
-      maxBotMentionsPerConversation: CONFIG.max_bot_mentions_per_conversation || 10
+      maxBotMentionsPerConversation: CONFIG.max_bot_mentions_per_conversation || 10,
+      maxConversationFrames: CONFIG.max_conversation_frames
     });
     (messageReceptor as any).element = space;
     space.addReceptor(messageReceptor);

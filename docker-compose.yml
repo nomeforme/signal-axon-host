@@ -1,0 +1,50 @@
+services:
+  # Signal CLI REST API
+  signal-api:
+    image: bbernhard/signal-cli-rest-api:latest
+    container_name: signal-api-connectome
+    ports:
+      - "8081:8080"
+    volumes:
+      # Mount signal-cli data directory to persist accounts
+      # Using same volume as JS bot for account sharing
+      - ${HOME}/.local/share/signal-api:/home/.local/share/signal-cli
+    environment:
+      - MODE=json-rpc
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/about"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  # Connectome Signal Bot
+  bot:
+    build:
+      context: ..
+      dockerfile: signal-axon-host/Dockerfile
+    container_name: signal-bot-connectome
+    depends_on:
+      signal-api:
+        condition: service_healthy
+    volumes:
+      # Mount config files
+      - ./config.json:/workspace/signal-axon-host/config.json:ro
+      - ./.env:/workspace/signal-axon-host/.env:ro
+      # Mount signal-cli data directory to access accounts.json (read-only)
+      - ${HOME}/.local/share/signal-api:/home/.local/share/signal-api:ro
+      # Mount state directory for persistence
+      - ./signal-bot-state:/workspace/signal-axon-host/signal-bot-state
+    environment:
+      - NODE_ENV=production
+      # Override URLs to use container network
+      - WS_BASE_URL=ws://signal-api:8080
+      - HTTP_BASE_URL=http://signal-api:8080
+    restart: unless-stopped
+    networks:
+      - default
+
+networks:
+  default:
+    driver: bridge

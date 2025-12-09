@@ -59,6 +59,10 @@ export class FocusedContextTransform extends BaseTransform {
   process(state: ReadonlyVEILState): VEILDelta[] {
     const deltas: VEILDelta[] = [];
 
+    // Cache rendered context by streamId to avoid duplicate rendering
+    // when multiple activations exist for the same stream (e.g., mention + random reply)
+    const contextCache = new Map<string, RenderedContext>();
+
     // Find all agent-activation facets that need context rendered
     for (const [id, facet] of state.facets) {
       if (facet.type === 'agent-activation' && hasStateAspect(facet)) {
@@ -75,6 +79,30 @@ export class FocusedContextTransform extends BaseTransform {
 
         // Get the focused stream from the activation
         const focusedStreamId = activationState.streamRef?.streamId;
+
+        // Check if we already rendered context for this stream in this pass
+        const cachedContext = focusedStreamId ? contextCache.get(focusedStreamId) : undefined;
+
+        if (cachedContext) {
+          // Reuse cached context - just create a new facet referencing it
+          const botName = activationState.targetAgent;
+          console.log(`[FocusedContextTransform] Reusing cached context for ${botName} (stream ${focusedStreamId})`);
+
+          const contextFacetId = `context-${id}-${Date.now()}`;
+          deltas.push({
+            type: 'addFacet',
+            facet: {
+              id: contextFacetId,
+              type: 'rendered-context',
+              state: {
+                activationId: id,
+                tokenCount: cachedContext.metadata.totalTokens,
+                context: cachedContext
+              }
+            }
+          });
+          continue;
+        }
 
         // Get VEILStateManager from Space
         const space = this.element?.findSpace() as any;
@@ -203,6 +231,11 @@ Signal supports these text formatting options:
             });
             console.log(`[FocusedContextTransform] Created new system message for ${botName}`);
           }
+        }
+
+        // Cache the rendered context for this stream
+        if (focusedStreamId) {
+          contextCache.set(focusedStreamId, context);
         }
 
         // Create rendered-context facet

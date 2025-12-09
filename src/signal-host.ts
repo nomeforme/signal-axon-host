@@ -736,7 +736,29 @@ async function main() {
 
   // Start the host
   try {
-    await host.start(app);
+    const space = await host.start(app);
+
+    // Trim in-memory frames to save memory (old frames are already persisted in buckets on disk)
+    const MAX_MEMORY_FRAMES = 200;
+    const veilStateManager = space.getVEILStateManager();
+    const state = veilStateManager.getState();
+    const frameCount = state.frameHistory.length;
+
+    if (frameCount > MAX_MEMORY_FRAMES) {
+      console.log(`[SignalHost] Trimming in-memory frames: ${frameCount} -> ${MAX_MEMORY_FRAMES} (old frames preserved on disk)`);
+      const trimmedState = {
+        ...state,
+        facets: new Map(state.facets),
+        scopes: new Set(state.scopes),
+        streams: new Map(state.streams),
+        agents: new Map(state.agents),
+        removals: new Map(state.removals),
+        currentStateCache: new Map(state.currentStateCache),
+        frameHistory: state.frameHistory.slice(-MAX_MEMORY_FRAMES)
+      };
+      veilStateManager.setState(trimmedState);
+      console.log(`[SignalHost] Frame trim complete. Memory freed for ${frameCount - MAX_MEMORY_FRAMES} frames.`);
+    }
   } catch (error) {
     console.error('❌ Failed to start:', error);
     process.exit(1);

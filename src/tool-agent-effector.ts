@@ -150,6 +150,28 @@ export class ToolAgentEffector extends BaseEffector {
 
         // Note: We do NOT remove the activation facet - it stays in state to prevent
         // duplicate activations from re-processed messages (consistency checker)
+
+        // Clean up rendered-context facet to save memory (it's no longer needed)
+        const contextFacetToDelete = Array.from(state.facets.values()).find(f =>
+          f.type === 'rendered-context' &&
+          hasStateAspect(f) &&
+          (f.state as Record<string, any>).activationId === activationId
+        );
+        if (contextFacetToDelete) {
+          this.element.emit({
+            topic: 'veil:operation',
+            source: this.element.getRef(),
+            timestamp: Date.now(),
+            payload: {
+              operation: {
+                type: 'deleteFacet',
+                facetId: contextFacetToDelete.id
+              }
+            }
+          });
+          console.log(`[ToolAgentEffector:${this.agentName}] Deleted rendered-context facet ${contextFacetToDelete.id}`);
+        }
+
         console.log(`[ToolAgentEffector:${this.agentName}] Cycle complete`);
 
       } catch (error) {
@@ -243,8 +265,12 @@ export class ToolAgentEffector extends BaseEffector {
     try {
       await axios.post(url, payload);
       console.log(`[ToolAgentEffector:${this.agentName}] Error message sent to ${recipientId}`);
-    } catch (sendError) {
+    } catch (sendError: any) {
       console.error(`[ToolAgentEffector:${this.agentName}] Failed to send error message:`, sendError);
+      if (sendError.response?.data) {
+        console.error(`[ToolAgentEffector:${this.agentName}] Signal API response:`, JSON.stringify(sendError.response.data));
+      }
+      console.error(`[ToolAgentEffector:${this.agentName}] Payload was:`, JSON.stringify(payload));
     }
   }
 

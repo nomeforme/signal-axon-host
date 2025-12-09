@@ -1,0 +1,4 @@
+signal-bot-state/
+node_modules/
+*.log
+.env

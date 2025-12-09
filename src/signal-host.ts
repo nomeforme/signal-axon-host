@@ -70,6 +70,7 @@ interface SignalConfig {
   random_reply_chance?: number;
   max_bot_mentions_per_conversation?: number;
   max_conversation_frames: number;
+  max_memory_frames: number;
 }
 
 let CONFIG: SignalConfig;
@@ -310,7 +311,8 @@ class SignalApplication implements ConnectomeApplication {
       groupPrivacyMode: (CONFIG.group_privacy_mode || 'opt-in') as 'opt-in' | 'opt-out',
       randomReplyChance: CONFIG.random_reply_chance || 0,
       maxBotMentionsPerConversation: CONFIG.max_bot_mentions_per_conversation || 10,
-      maxConversationFrames: CONFIG.max_conversation_frames
+      maxConversationFrames: CONFIG.max_conversation_frames,
+      maxMemoryFrames: CONFIG.max_memory_frames
     });
     (messageReceptor as any).element = space;
     space.addReceptor(messageReceptor);
@@ -625,7 +627,8 @@ class SignalApplication implements ConnectomeApplication {
       groupPrivacyMode: (CONFIG.group_privacy_mode || 'opt-in') as 'opt-in' | 'opt-out',
       randomReplyChance: CONFIG.random_reply_chance || 0,
       maxBotMentionsPerConversation: CONFIG.max_bot_mentions_per_conversation || 10,
-      maxConversationFrames: CONFIG.max_conversation_frames
+      maxConversationFrames: CONFIG.max_conversation_frames,
+      maxMemoryFrames: CONFIG.max_memory_frames
     });
     (messageReceptor as any).element = space;
     space.addReceptor(messageReceptor);
@@ -739,13 +742,13 @@ async function main() {
     const space = await host.start(app);
 
     // Trim in-memory frames to save memory (old frames are already persisted in buckets on disk)
-    const MAX_MEMORY_FRAMES = 200;
+    const maxMemoryFrames = CONFIG.max_memory_frames;
     const veilStateManager = space.getVEILStateManager();
     const state = veilStateManager.getState();
     const frameCount = state.frameHistory.length;
 
-    if (frameCount > MAX_MEMORY_FRAMES) {
-      console.log(`[SignalHost] Trimming in-memory frames: ${frameCount} -> ${MAX_MEMORY_FRAMES} (old frames preserved on disk)`);
+    if (frameCount > maxMemoryFrames) {
+      console.log(`[SignalHost] Trimming in-memory frames: ${frameCount} -> ${maxMemoryFrames} (old frames preserved on disk)`);
       const trimmedState = {
         ...state,
         facets: new Map(state.facets),
@@ -754,10 +757,10 @@ async function main() {
         agents: new Map(state.agents),
         removals: new Map(state.removals),
         currentStateCache: new Map(state.currentStateCache),
-        frameHistory: state.frameHistory.slice(-MAX_MEMORY_FRAMES)
+        frameHistory: state.frameHistory.slice(-maxMemoryFrames)
       };
       veilStateManager.setState(trimmedState);
-      console.log(`[SignalHost] Frame trim complete. Memory freed for ${frameCount - MAX_MEMORY_FRAMES} frames.`);
+      console.log(`[SignalHost] Frame trim complete. Memory freed for ${frameCount - maxMemoryFrames} frames.`);
     }
   } catch (error) {
     console.error('❌ Failed to start:', error);

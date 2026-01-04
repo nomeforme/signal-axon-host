@@ -308,14 +308,19 @@ export class BedrockProvider implements LLMProvider {
         const isImage = contentType.startsWith('image/');
 
         if (isImage && attachment.data) {
-          contentBlocks.push({
-            type: 'image',
-            source: {
-              type: 'base64',
-              media_type: this.getMediaType(contentType),
-              data: attachment.data
-            }
-          });
+          const mediaType = this.getValidatedMediaType(attachment.data, contentType);
+          if (mediaType) {
+            contentBlocks.push({
+              type: 'image',
+              source: {
+                type: 'base64',
+                media_type: mediaType,
+                data: attachment.data
+              }
+            });
+          } else {
+            console.log(`[BedrockProvider] Skipping unsupported image format: ${contentType}`);
+          }
         }
       }
     }
@@ -384,6 +389,64 @@ export class BedrockProvider implements LLMProvider {
     if (normalized.includes('gif')) return 'image/gif';
     if (normalized.includes('webp')) return 'image/webp';
     return 'image/jpeg';
+  }
+
+  /**
+   * Detect actual image format from base64 data using magic bytes
+   */
+  private detectImageTypeFromBase64(base64Data: string): string | null {
+    try {
+      const buffer = Buffer.from(base64Data.slice(0, 32), 'base64');
+
+      // PNG: 89 50 4E 47 0D 0A 1A 0A
+      if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47) {
+        return 'image/png';
+      }
+
+      // JPEG: FF D8 FF
+      if (buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF) {
+        return 'image/jpeg';
+      }
+
+      // GIF: 47 49 46 38 (GIF8)
+      if (buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x38) {
+        return 'image/gif';
+      }
+
+      // WebP: 52 49 46 46 ... 57 45 42 50 (RIFF....WEBP)
+      if (buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46 &&
+          buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50) {
+        return 'image/webp';
+      }
+
+      // HEIC/HEIF: Check for ftyp box
+      if (buffer[4] === 0x66 && buffer[5] === 0x74 && buffer[6] === 0x79 && buffer[7] === 0x70) {
+        const brand = buffer.slice(8, 12).toString('ascii');
+        if (['heic', 'heix', 'hevc', 'mif1', 'msf1', 'hevx'].includes(brand)) {
+          console.log(`[BedrockProvider] Detected HEIC/HEIF image (brand: ${brand}) - not supported`);
+          return null;
+        }
+      }
+
+      return null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  /**
+   * Get validated media type, preferring detection from bytes
+   */
+  private getValidatedMediaType(base64Data: string, declaredContentType: string): string | null {
+    const detectedType = this.detectImageTypeFromBase64(base64Data);
+    if (detectedType) {
+      const declaredType = this.getMediaType(declaredContentType);
+      if (declaredType !== detectedType) {
+        console.log(`[BedrockProvider] Image type mismatch: declared ${declaredContentType} but detected ${detectedType}`);
+      }
+      return detectedType;
+    }
+    return this.getMediaType(declaredContentType);
   }
 
   private isRetryableError(error: any): boolean {

@@ -116,7 +116,8 @@ export class AnthropicToolProvider implements LLMProvider {
                   imageData = imageUrl;
                 }
 
-                const mediaType = this.getAnthropicMediaType(contentType);
+                // Use validated media type detection (checks actual bytes, not just declared type)
+                const mediaType = this.getValidatedMediaType(imageData, contentType);
                 if (mediaType) {
                   contentBlocks.push({
                     type: 'image',
@@ -126,6 +127,8 @@ export class AnthropicToolProvider implements LLMProvider {
                       data: imageData
                     }
                   } as Anthropic.ImageBlockParam);
+                } else {
+                  console.log(`[AnthropicToolProvider] Skipping unsupported image format: ${contentType}`);
                 }
               } catch (error) {
                 console.error(`[AnthropicToolProvider] Failed to process image:`, error);
@@ -384,5 +387,77 @@ export class AnthropicToolProvider implements LLMProvider {
     if (normalized.includes('gif')) return 'image/gif';
     if (normalized.includes('webp')) return 'image/webp';
     return null;
+  }
+
+  /**
+   * Detect actual image format from base64 data using magic bytes
+   * This is more reliable than trusting the contentType header
+   */
+  private detectImageTypeFromBase64(base64Data: string): 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' | null {
+    try {
+      // Decode first few bytes to check magic numbers
+      const buffer = Buffer.from(base64Data.slice(0, 32), 'base64');
+
+      // PNG: 89 50 4E 47 0D 0A 1A 0A
+      if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47) {
+        return 'image/png';
+      }
+
+      // JPEG: FF D8 FF
+      if (buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF) {
+        return 'image/jpeg';
+      }
+
+      // GIF: 47 49 46 38 (GIF8)
+      if (buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x38) {
+        return 'image/gif';
+      }
+
+      // WebP: 52 49 46 46 ... 57 45 42 50 (RIFF....WEBP)
+      if (buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46 &&
+          buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50) {
+        return 'image/webp';
+      }
+
+      // HEIC/HEIF: Check for ftyp box with heic/heix/hevc/mif1 brands
+      // Starts at offset 4: 66 74 79 70 (ftyp)
+      if (buffer[4] === 0x66 && buffer[5] === 0x74 && buffer[6] === 0x79 && buffer[7] === 0x70) {
+        const brand = buffer.slice(8, 12).toString('ascii');
+        if (['heic', 'heix', 'hevc', 'mif1', 'msf1', 'hevx'].includes(brand)) {
+          // HEIC/HEIF detected - not supported by Anthropic, return null
+          console.log(`[AnthropicToolProvider] Detected HEIC/HEIF image (brand: ${brand}) - not supported`);
+          return null;
+        }
+      }
+
+      return null;
+    } catch (error) {
+      console.error('[AnthropicToolProvider] Error detecting image type:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Get the correct media type for an image, preferring detection from bytes
+   */
+  private getValidatedMediaType(base64Data: string, declaredContentType: string): 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' | null {
+    // First try to detect from actual bytes
+    const detectedType = this.detectImageTypeFromBase64(base64Data);
+
+    if (detectedType) {
+      // If declared type differs from detected, log a warning
+      const declaredMediaType = this.getAnthropicMediaType(declaredContentType);
+      if (declaredMediaType && declaredMediaType !== detectedType) {
+        console.log(`[AnthropicToolProvider] Image type mismatch: declared ${declaredContentType} but detected ${detectedType}`);
+      }
+      return detectedType;
+    }
+
+    // Fall back to declared content type if detection failed
+    const fallbackType = this.getAnthropicMediaType(declaredContentType);
+    if (fallbackType) {
+      console.log(`[AnthropicToolProvider] Could not detect image type from bytes, using declared: ${declaredContentType}`);
+    }
+    return fallbackType;
   }
 }

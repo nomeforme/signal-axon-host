@@ -8,13 +8,17 @@
  * The prefix is stripped before sending to Signal (in signal-effector.ts).
  */
 
-import { BaseReceptor } from 'connectome-ts/dist/components/base-martem.js';
-import type { SpaceEvent, ReadonlyVEILState, VEILDelta } from 'connectome-ts';
+import { Component, priorityConstraint, ComponentPriority } from 'connectome-ts';
+import type { SpaceEvent, ReadonlyVEILState, VEILDelta, ExecutionContext } from 'connectome-ts';
 
-export class SpeakerPrefixReceptor extends BaseReceptor {
+export class SpeakerPrefixReceptor extends Component {
+  constraints = [priorityConstraint(ComponentPriority.RECEPTOR)];
   readonly topics = ['veil:operation'];
 
-  transform(event: SpaceEvent, state: ReadonlyVEILState): VEILDelta[] {
+  execute(context: ExecutionContext): void {
+    const { event } = context;
+    if (event.topic !== 'veil:operation') return;
+
     const payload = event.payload as any;
 
     console.log(`[SpeakerPrefixReceptor] Received veil:operation event`);
@@ -34,14 +38,14 @@ export class SpeakerPrefixReceptor extends BaseReceptor {
 
     // Only process addFacet operations
     if (operation !== 'addFacet') {
-      return [];
+      return;
     }
 
     console.log(`[SpeakerPrefixReceptor] addFacet: type=${facet?.type}, agentName=${facet?.agentName}, agentId=${facet?.agentId}`);
 
     // Only process speech facets from agents
     if (facet?.type !== 'speech' || !facet.agentName || !facet.agentId) {
-      return [];
+      return;
     }
 
     const agentName = facet.agentName;
@@ -61,14 +65,13 @@ export class SpeakerPrefixReceptor extends BaseReceptor {
         facet.content = content;
         console.log(`[SpeakerPrefixReceptor] Updated facet with stripped content (prefix already present)`);
       }
-      return [];
+      return;
     }
 
     // Modify the facet content in place (before it gets added to VEIL)
     console.log(`[SpeakerPrefixReceptor] Adding prefix "${agentName}:" to facet ${facet.id}`);
     facet.content = `${agentName}: ${content}`;
 
-    // Return empty - we modified the event payload in place
-    return [];
+    // We modified the event payload in place - no deltas to add
   }
 }

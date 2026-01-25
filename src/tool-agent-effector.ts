@@ -6,20 +6,18 @@
  */
 
 import axios from 'axios';
-import { BaseEffector } from 'connectome-ts/dist/components/base-martem.js';
+import { Component, priorityConstraint, ComponentPriority } from 'connectome-ts';
 import type {
   FacetDelta,
   ReadonlyVEILState,
-  EffectorResult,
   FacetFilter,
-  ExternalAction
-} from 'connectome-ts/dist/spaces/receptor-effector-types.js';
+  ExecutionContext
+} from 'connectome-ts';
 import type {
   Facet,
   StreamRef
-} from 'connectome-ts/dist/veil/types.js';
+} from 'connectome-ts';
 import { hasStateAspect } from 'connectome-ts/dist/veil/types.js';
-import type { SpaceEvent } from 'connectome-ts/dist/spaces/types.js';
 import type { RenderedContext } from 'connectome-ts/dist/hud/types-v2.js';
 import { ToolLoopAgent } from './tool-loop-agent.js';
 
@@ -28,7 +26,9 @@ export interface SignalErrorConfig {
   botNames: Map<string, string>;
 }
 
-export class ToolAgentEffector extends BaseEffector {
+export class ToolAgentEffector extends Component {
+  constraints = [priorityConstraint(ComponentPriority.EFFECTOR)];
+
   facetFilters: FacetFilter[] = [
     { type: 'agent-activation' },
     { type: 'rendered-context' }
@@ -55,17 +55,17 @@ export class ToolAgentEffector extends BaseEffector {
     }
   }
 
-  async process(changes: FacetDelta[], state: ReadonlyVEILState): Promise<EffectorResult> {
-    const events: SpaceEvent[] = [];
-    const externalActions: ExternalAction[] = [];
+  execute(context: ExecutionContext): void {
+    const { state, frame } = context;
+    if (!frame?.deltas) return;
 
-    for (const change of changes) {
-      if (change.type !== 'added') continue;
+    for (const delta of frame.deltas) {
+      if (delta.type !== 'addFacet') continue;
 
-      if (change.facet.type === 'agent-activation') {
-        const activationId = change.facet.id;
-        const activationState = hasStateAspect(change.facet)
-          ? (change.facet.state as Record<string, any>)
+      if (delta.facet.type === 'agent-activation') {
+        const activationId = delta.facet.id;
+        const activationState = hasStateAspect(delta.facet)
+          ? (delta.facet.state as Record<string, any>)
           : {};
 
         // Skip if already processing
@@ -102,14 +102,12 @@ export class ToolAgentEffector extends BaseEffector {
 
         // Get the context
         const contextState = contextFacet.state as { context: RenderedContext };
-        const context = contextState.context;
+        const renderedContext = contextState.context;
 
         // Run agent cycle in background (pass state for error handling)
-        this.runAgentCycleBackground(context, streamRef, activationId, streamId, state);
+        this.runAgentCycleBackground(renderedContext, streamRef, activationId, streamId, state);
       }
     }
-
-    return { events, externalActions };
   }
 
   private runAgentCycleBackground(
@@ -134,10 +132,8 @@ export class ToolAgentEffector extends BaseEffector {
             const facet = this.prepareFacet(operation.facet, streamRef);
             console.log(`[ToolAgentEffector:${this.agentName}] Emitting facet: ${facet.type} (${facet.id})`);
 
-            this.element.emit({
+            this.emit({
               topic: 'veil:operation',
-              source: this.element.getRef(),
-              timestamp: Date.now(),
               payload: {
                 operation: {
                   type: 'addFacet',
@@ -158,10 +154,8 @@ export class ToolAgentEffector extends BaseEffector {
           (f.state as Record<string, any>).activationId === activationId
         );
         if (contextFacetToDelete) {
-          this.element.emit({
+          this.emit({
             topic: 'veil:operation',
-            source: this.element.getRef(),
-            timestamp: Date.now(),
             payload: {
               operation: {
                 type: 'deleteFacet',

@@ -29,5 +29,8 @@ RUN npm install && npm run build
 # Create directory for state persistence
 RUN mkdir -p /workspace/signal-axon-host/signal-bot-state
 
+# Allocate max heap for Node (server has ~8GB RAM, leave ~2GB for OS)
+ENV NODE_OPTIONS="--max-old-space-size=6144"
+
 # Run the application
 CMD ["npm", "start"]

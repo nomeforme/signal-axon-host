@@ -8,8 +8,8 @@
  * completely separate - a DM conversation should not see group chat messages.
  */
 
-import { BaseTransform } from 'connectome-ts/dist/components/base-martem.js';
-import type { ReadonlyVEILState } from 'connectome-ts';
+import { Component, priorityConstraint } from 'connectome-ts';
+import type { ReadonlyVEILState, ExecutionContext } from 'connectome-ts';
 import type { VEILDelta, Facet } from 'connectome-ts';
 import { FrameTrackingHUD } from 'connectome-ts/dist/hud/frame-tracking-hud.js';
 import type { HUDConfig, RenderedContext } from 'connectome-ts/dist/hud/types-v2.js';
@@ -27,9 +27,10 @@ export interface FocusedContextTransformConfig {
   maxConversationFrames: number;
 }
 
-export class FocusedContextTransform extends BaseTransform {
+export class FocusedContextTransform extends Component {
   // Priority: Run after compression (which has priority 10)
-  priority = 100;
+  // Keep same priority=100 as before
+  constraints = [priorityConstraint(100)];
 
   // Number of initial setup frames to always include regardless of stream
   private static readonly SETUP_FRAME_LIMIT = 5;
@@ -56,7 +57,8 @@ export class FocusedContextTransform extends BaseTransform {
     console.log(`[FocusedContextTransform] maxConversationFrames updated to ${value}`);
   }
 
-  process(state: ReadonlyVEILState): VEILDelta[] {
+  execute(context: ExecutionContext): void {
+    const { state } = context;
     const deltas: VEILDelta[] = [];
 
     // Cache rendered context by streamId to avoid duplicate rendering
@@ -105,7 +107,7 @@ export class FocusedContextTransform extends BaseTransform {
         }
 
         // Get VEILStateManager from Space
-        const space = this.element?.findSpace() as any;
+        const space = this.space as any;
 
         if (!space || !space.getVEILStateManager) {
           console.error('[FocusedContextTransform] Cannot access VEILStateManager');
@@ -206,7 +208,7 @@ Signal supports these text formatting options:
         };
 
         // Render context with filtered frames
-        const context = this.hud.render(
+        const renderedContext = this.hud.render(
           allFrames,
           fullState.facets,
           veilStateManager,
@@ -218,14 +220,14 @@ Signal supports these text formatting options:
         // The Anthropic provider only uses the FIRST system message, so we need to combine
         // our bot identity prompt with any existing tool instructions
         if (agentOptions.systemPrompt) {
-          const existingSystemMsg = context.messages.find((m: any) => m.role === 'system');
+          const existingSystemMsg = renderedContext.messages.find((m: any) => m.role === 'system');
           if (existingSystemMsg) {
             // Prepend our prompt to existing system content (tool instructions come after)
             existingSystemMsg.content = `${existingSystemMsg.content}\n\n${agentOptions.systemPrompt}`;
             console.log(`[FocusedContextTransform] Appended system prompt to existing system message for ${botName}`);
           } else {
             // No existing system message, create one
-            context.messages.unshift({
+            renderedContext.messages.unshift({
               role: 'system',
               content: agentOptions.systemPrompt
             });
@@ -235,7 +237,7 @@ Signal supports these text formatting options:
 
         // Cache the rendered context for this stream
         if (focusedStreamId) {
-          contextCache.set(focusedStreamId, context);
+          contextCache.set(focusedStreamId, renderedContext);
         }
 
         // Create rendered-context facet
@@ -248,14 +250,17 @@ Signal supports these text formatting options:
             type: 'rendered-context',
             state: {
               activationId: id,
-              tokenCount: context.metadata.totalTokens,
-              context: context
+              tokenCount: renderedContext.metadata.totalTokens,
+              context: renderedContext
             }
           }
         });
       }
     }
 
-    return deltas;
+    // Add all deltas via addOperation
+    for (const delta of deltas) {
+      this.addOperation(delta);
+    }
   }
 }

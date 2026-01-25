@@ -15,19 +15,17 @@ import axios from 'axios';
 import {
   ConnectomeHost,
   Space,
-  Element,
   VEILStateManager,
   ComponentRegistry,
   AnthropicProvider,
   BasicAgent,
-  AgentEffector,
-  ElementRequestReceptor,
-  ElementTreeMaintainer
+  AgentEffector
 } from 'connectome-ts';
 import { FocusedContextTransform } from './focused-context-transform.js';
 import { SpeakerPrefixReceptor } from './speaker-prefix-receptor.js';
 import { AnthropicToolProvider } from './anthropic-tool-provider.js';
 import { BedrockProvider } from './bedrock-provider.js';
+import { migrateImages } from './image-migration.js';
 import { ToolLoopAgent, createFetchTool } from './tool-loop-agent.js';
 import { ToolAgentEffector, SignalErrorConfig } from './tool-agent-effector.js';
 import { ActiveStreamTransform } from 'connectome-ts/dist/transforms/active-stream-transform.js';
@@ -83,6 +81,9 @@ try {
 }
 
 class SignalApplication implements ConnectomeApplication {
+  // Track afferents by bot name for reconnection support
+  private botAfferents = new Map<string, SignalAfferent>();
+
   async createSpace(hostRegistry?: Map<string, any>, lifecycleId?: string, spaceId?: string): Promise<{ space: Space; veilState: VEILStateManager }> {
     const veilState = new VEILStateManager();
     // Pass lifecycleId and spaceId for restoration - this preserves element IDs across restarts
@@ -159,51 +160,17 @@ class SignalApplication implements ConnectomeApplication {
       }
     }
 
-    // Create bot elements via VEIL (Connectome-native pattern)
+    // Create and initialize bot afferents directly (no Element tree)
     for (let i = 0; i < Math.min(botPhones.length, CONFIG.bots.length); i++) {
       const bot = CONFIG.bots[i];
       const botPhone = botPhones[i];
 
-      console.log(`Creating bot element: ${bot.name} (${botPhone})`);
+      console.log(`Creating afferent for bot: ${bot.name} (${botPhone})`);
 
-      // Create bot element with SignalAfferent component
-      space.emit({
-        topic: 'element:create',
-        source: space.getRef(),
-        timestamp: Date.now(),
-        payload: {
-          parentId: space.id,
-          name: `bot-${bot.name}`,
-          components: [{
-            type: 'SignalAfferent',
-            config: {
-              botPhone,
-              wsUrl: process.env.WS_BASE_URL || 'ws://localhost:8080',
-              httpUrl: process.env.HTTP_BASE_URL || 'http://localhost:8080',
-              maxReconnectTime: 5 * 60 * 1000 // 5 minutes
-            }
-          }]
-        }
-      });
-    }
+      // Create SignalAfferent directly
+      const afferent = new SignalAfferent();
 
-    // Wait for element creation
-    await new Promise(resolve => setTimeout(resolve, 100));
-
-    // Initialize and start all afferents
-    for (let i = 0; i < CONFIG.bots.length; i++) {
-      const bot = CONFIG.bots[i];
-      const botPhone = botPhones[i];
-      const botElem = space.children.find(child => child.name === `bot-${bot.name}`);
-
-      if (!botElem) {
-        console.warn(`Bot element not found for ${bot.name}`);
-        continue;
-      }
-
-      const afferent = botElem.components[0] as SignalAfferent;
-
-      // Create proper config for the afferent
+      // Create config for the afferent
       const config = {
         botPhone,
         wsUrl: process.env.WS_BASE_URL || 'ws://localhost:8080',
@@ -213,15 +180,20 @@ class SignalApplication implements ConnectomeApplication {
 
       const context: AfferentContext<any> = {
         config,
-        afferentId: botElem.id,
+        afferentId: `afferent-${bot.name}`,
         emit: (event) => space.emit(event),
-        emitError: (error) => console.error(`[${botElem.name}] Error:`, error)
+        emitError: (error) => console.error(`[${bot.name}] Error:`, error)
       };
 
+      // Add to space and initialize
+      space.addComponent(afferent);
       await afferent.initialize(context);
       await afferent.start();
 
-      console.log(`✓ Started afferent for ${botElem.name}`);
+      // Store in map for later access (reconnection, etc.)
+      this.botAfferents.set(bot.name, afferent);
+
+      console.log(`✓ Started afferent for ${bot.name}`);
     }
 
     // Create agent elements (one per bot) with per-bot LLM providers
@@ -268,10 +240,6 @@ class SignalApplication implements ConnectomeApplication {
         console.log(`  Using Anthropic provider for ${bot.name} with model: ${modelName}`);
       }
 
-      // Create agent element
-      const agentElem = new Element(`agent-${bot.name}`);
-      space.addChild(agentElem);
-
       // Build tools list based on bot config
       const agentTools = [];
       if (bot.tools?.includes('fetch')) {
@@ -298,8 +266,7 @@ class SignalApplication implements ConnectomeApplication {
         botNames
       };
       const effector = new ToolAgentEffector(agent, bot.name, signalErrorConfig);
-      (effector as any).element = space;
-      space.addEffector(effector);
+      space.addComponent(effector);
 
       console.log(`✓ Created agent: ${bot.name} with ${agentTools.length} tool(s)`);
     }
@@ -314,16 +281,13 @@ class SignalApplication implements ConnectomeApplication {
       maxConversationFrames: CONFIG.max_conversation_frames,
       maxMemoryFrames: CONFIG.max_memory_frames
     });
-    (messageReceptor as any).element = space;
-    space.addReceptor(messageReceptor);
+    space.addComponent(messageReceptor);
 
     const receiptReceptor = new SignalReceiptReceptor();
-    (receiptReceptor as any).element = space;
-    space.addReceptor(receiptReceptor);
+    space.addComponent(receiptReceptor);
 
     const typingReceptor = new SignalTypingReceptor();
-    (typingReceptor as any).element = space;
-    space.addReceptor(typingReceptor);
+    space.addComponent(typingReceptor);
 
     // Pending messages queue for re-processing after reconnection
     const pendingMessages = new Map<string, any[]>();
@@ -344,13 +308,7 @@ class SignalApplication implements ConnectomeApplication {
         pendingMessages.get(botPhone)!.push(queuedMessage);
       }
 
-      const botElem = space.children.find(child => child.name === `bot-${botName}`);
-      if (!botElem) {
-        console.error(`  ⚠ Cannot reconnect - bot element not found for ${botName}`);
-        return;
-      }
-
-      const afferent = botElem.components[0] as SignalAfferent;
+      const afferent = this.botAfferents.get(botName);
       if (!afferent) {
         console.error(`  ⚠ Cannot reconnect - no afferent found for ${botName}`);
         return;
@@ -370,7 +328,7 @@ class SignalApplication implements ConnectomeApplication {
               // Re-emit the message event so it gets processed by receptors
               space.emit({
                 topic: 'signal:message',
-                source: { elementId: botElem.id, elementPath: [] },
+                source: space.getRef(),
                 timestamp: msgPayload.timestamp || Date.now(),
                 payload: updatedPayload
               });
@@ -386,8 +344,7 @@ class SignalApplication implements ConnectomeApplication {
       botNames,
       reconnectBot
     });
-    (consistencyReceptor as any).element = space;
-    space.addReceptor(consistencyReceptor);
+    space.addComponent(consistencyReceptor);
 
     // Add speech effector
     const speechEffector = new SignalSpeechEffector({
@@ -395,19 +352,18 @@ class SignalApplication implements ConnectomeApplication {
       botNames,
       maxMessageLength: 400
     });
-    (speechEffector as any).element = space;
-    space.addEffector(speechEffector);
+    space.addComponent(speechEffector);
 
     // Add active stream transform (reads streamId from event payload and sets frame.activeStream)
     const activeStreamTransform = new ActiveStreamTransform();
-    await activeStreamTransform.mount(space);
+    space.addComponent(activeStreamTransform);
 
     // Add focused context transform (builds HUD context for agents, filtering by stream)
     // This ensures DM context is separate from group chat context
     const contextTransform = new FocusedContextTransform({
       maxConversationFrames: CONFIG.max_conversation_frames
     });
-    await contextTransform.mount(space);
+    space.addComponent(contextTransform);
 
     // Add command effector for !rr, !bb, !mf, !help commands
     const commandEffector = new SignalCommandEffector(
@@ -425,14 +381,12 @@ class SignalApplication implements ConnectomeApplication {
         console.log('[SignalHost] Config updated via command:', updates);
       }
     );
-    (commandEffector as any).element = space;
-    space.addEffector(commandEffector);
+    space.addComponent(commandEffector);
 
     // Add speaker prefix receptor (prepends bot name to agent speech content)
     // This allows other bots to identify who said what in conversation history
     const speakerPrefixReceptor = new SpeakerPrefixReceptor();
-    (speakerPrefixReceptor as any).element = space;
-    space.addReceptor(speakerPrefixReceptor);
+    space.addComponent(speakerPrefixReceptor);
 
     console.log(`\n✅ ${CONFIG.bots.length} Signal bots initialized\n`);
     console.log('Listening for Signal messages...\n');
@@ -452,7 +406,7 @@ class SignalApplication implements ConnectomeApplication {
       topic: 'system:init',
       payload: { reason: 'Initialize components and register tools' },
       timestamp: Date.now(),
-      source: { elementId: 'host', elementPath: [] }
+      source: space.getRef()
     });
 
     // Give time for frame to process
@@ -463,18 +417,17 @@ class SignalApplication implements ConnectomeApplication {
   async onRestore(space: Space, veilState: VEILStateManager): Promise<void> {
     console.log('♻️  Signal bots restored from snapshot\n');
 
-    // Mount transforms and maintainers (these don't persist)
+    // Add transforms and components (these don't persist)
     const activeStreamTransform = new ActiveStreamTransform();
-    await activeStreamTransform.mount(space);
+    space.addComponent(activeStreamTransform);
 
     const contextTransform = new FocusedContextTransform({
       maxConversationFrames: CONFIG.max_conversation_frames
     });
-    await contextTransform.mount(space);
+    space.addComponent(contextTransform);
 
     const speakerPrefixReceptor = new SpeakerPrefixReceptor();
-    (speakerPrefixReceptor as any).element = space;
-    space.addReceptor(speakerPrefixReceptor);
+    space.addComponent(speakerPrefixReceptor);
 
     console.log('✓ Mounted transforms and receptors');
 
@@ -526,98 +479,85 @@ class SignalApplication implements ConnectomeApplication {
     const hasAwsCredentials = !!(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY);
     const fetchTool = createFetchTool();
 
-    // Reconnect all afferents AND create agents/effectors
-    for (const botElem of space.children) {
-      if (botElem.name.startsWith('bot-')) {
-        const afferent = botElem.components[0] as SignalAfferent;
+    // Create afferents and agents for all configured bots
+    for (let i = 0; i < Math.min(botPhones.length, CONFIG.bots.length); i++) {
+      const botConfig = CONFIG.bots[i];
+      const botName = botConfig.name;
+      const botPhone = botPhones[i];
 
-        // Extract bot name from element name (e.g., "bot-haiku-4-5" -> "haiku-4-5")
-        const botName = botElem.name.replace(/^bot-/, '');
-        const botPhone = botPhoneMap.get(botName);
+      // Create and initialize afferent
+      const afferent = new SignalAfferent();
+      const config = {
+        botPhone,
+        wsUrl: process.env.WS_BASE_URL || 'ws://localhost:8080',
+        httpUrl: process.env.HTTP_BASE_URL || 'http://localhost:8080',
+        maxReconnectTime: 5 * 60 * 1000
+      };
 
-        if (!botPhone) {
-          console.warn(`[onRestore] No phone number found for ${botName}, skipping`);
+      const context: AfferentContext<any> = {
+        config,
+        afferentId: `afferent-${botName}`,
+        emit: (event) => space.emit(event),
+        emitError: (error) => console.error(`[${botName}] Error:`, error)
+      };
+
+      space.addComponent(afferent);
+      await afferent.initialize(context);
+      await afferent.start();
+
+      // Store in map for later access
+      this.botAfferents.set(botName, afferent);
+
+      // Create LLM provider for this bot
+      const modelName = botConfig.model || CONFIG.default_model || 'claude-sonnet-4-0';
+      const isBedrock = modelName.startsWith('bedrock-');
+
+      let botLlmProvider: AnthropicToolProvider | BedrockProvider;
+      if (isBedrock) {
+        if (!hasAwsCredentials) {
+          console.warn(`[onRestore] Skipping agent for ${botName}: Bedrock requires AWS credentials`);
           continue;
         }
-
-        // Rebuild afferent config from environment variables
-        const config = {
-          botPhone,
-          wsUrl: process.env.WS_BASE_URL || 'ws://localhost:8080',
-          httpUrl: process.env.HTTP_BASE_URL || 'http://localhost:8080',
-          maxReconnectTime: 5 * 60 * 1000
-        };
-
-        const context: AfferentContext<any> = {
-          config,
-          afferentId: botElem.id,
-          emit: (event) => space.emit(event),
-          emitError: (error) => console.error(`[${botElem.name}] Error:`, error)
-        };
-
-        await afferent.initialize(context);
-        await afferent.start();
-
-        // Find bot config for this bot
-        const botConfig = CONFIG.bots.find(b => b.name === botName);
-        if (!botConfig) {
-          console.warn(`[onRestore] No config found for ${botName}`);
-          continue;
-        }
-
-        // Create LLM provider for this bot
-        const modelName = botConfig.model || CONFIG.default_model || 'claude-sonnet-4-0';
-        const isBedrock = modelName.startsWith('bedrock-');
-
-        let botLlmProvider: AnthropicToolProvider | BedrockProvider;
-        if (isBedrock) {
-          if (!hasAwsCredentials) {
-            console.warn(`[onRestore] Skipping ${botName}: Bedrock requires AWS credentials`);
-            continue;
-          }
-          botLlmProvider = new BedrockProvider({
-            defaultModel: modelName,
-            defaultMaxTokens: 4096
-          });
-        } else {
-          botLlmProvider = new AnthropicToolProvider({
-            apiKey,
-            defaultModel: modelName,
-            defaultMaxTokens: 4096
-          });
-        }
-
-        // Build tools list
-        const agentTools = [];
-        if (botConfig.tools?.includes('fetch')) {
-          agentTools.push(fetchTool);
-        }
-
-        // Create ToolLoopAgent
-        const agent = new ToolLoopAgent(
-          {
-            name: botName,
-            systemPrompt: `You are in a Signal group chat. Your username in this conversation is ${botName}. You can mention other participants with @username.`,
-            defaultMaxTokens: 4096,
-            maxToolRounds: 5,
-            tools: agentTools
-          },
-          botLlmProvider,
-          veilState
-        );
-
-        // Create and register effector
-        // Pass Signal config so errors can be sent directly to Signal
-        const signalErrorConfig: SignalErrorConfig = {
-          apiUrl: process.env.HTTP_BASE_URL || 'http://localhost:8080',
-          botNames
-        };
-        const effector = new ToolAgentEffector(agent, botName, signalErrorConfig);
-        (effector as any).element = space;
-        space.addEffector(effector);
-
-        console.log(`✓ Reconnected ${botElem.name} (${botPhone}) with ${agentTools.length} tool(s)`);
+        botLlmProvider = new BedrockProvider({
+          defaultModel: modelName,
+          defaultMaxTokens: 4096
+        });
+      } else {
+        botLlmProvider = new AnthropicToolProvider({
+          apiKey,
+          defaultModel: modelName,
+          defaultMaxTokens: 4096
+        });
       }
+
+      // Build tools list
+      const agentTools = [];
+      if (botConfig.tools?.includes('fetch')) {
+        agentTools.push(fetchTool);
+      }
+
+      // Create ToolLoopAgent
+      const agent = new ToolLoopAgent(
+        {
+          name: botName,
+          systemPrompt: `You are in a Signal group chat. Your username in this conversation is ${botName}. You can mention other participants with @username.`,
+          defaultMaxTokens: 4096,
+          maxToolRounds: 5,
+          tools: agentTools
+        },
+        botLlmProvider,
+        veilState
+      );
+
+      // Create and register effector
+      const signalErrorConfig: SignalErrorConfig = {
+        apiUrl: process.env.HTTP_BASE_URL || 'http://localhost:8080',
+        botNames
+      };
+      const effector = new ToolAgentEffector(agent, botName, signalErrorConfig);
+      space.addComponent(effector);
+
+      console.log(`✓ Restored ${botName} (${botPhone}) with ${agentTools.length} tool(s)`);
     }
 
     // Create shared receptors
@@ -630,16 +570,13 @@ class SignalApplication implements ConnectomeApplication {
       maxConversationFrames: CONFIG.max_conversation_frames,
       maxMemoryFrames: CONFIG.max_memory_frames
     });
-    (messageReceptor as any).element = space;
-    space.addReceptor(messageReceptor);
+    space.addComponent(messageReceptor);
 
     const receiptReceptor = new SignalReceiptReceptor();
-    (receiptReceptor as any).element = space;
-    space.addReceptor(receiptReceptor);
+    space.addComponent(receiptReceptor);
 
     const typingReceptor = new SignalTypingReceptor();
-    (typingReceptor as any).element = space;
-    space.addReceptor(typingReceptor);
+    space.addComponent(typingReceptor);
 
     // Create speech effector
     const speechEffector = new SignalSpeechEffector({
@@ -647,8 +584,7 @@ class SignalApplication implements ConnectomeApplication {
       botNames,
       maxMessageLength: 400
     });
-    (speechEffector as any).element = space;
-    space.addEffector(speechEffector);
+    space.addComponent(speechEffector);
 
     // Create command effector
     const commandEffector = new SignalCommandEffector(
@@ -665,8 +601,7 @@ class SignalApplication implements ConnectomeApplication {
         console.log('[SignalHost] Config updated via command:', updates);
       }
     );
-    (commandEffector as any).element = space;
-    space.addEffector(commandEffector);
+    space.addComponent(commandEffector);
 
     console.log('✓ Restored all receptors and effectors');
   }
@@ -736,6 +671,15 @@ async function main() {
 
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
+
+  // Run image migration if needed (compresses existing images in facets)
+  if (!reset) {
+    try {
+      await migrateImages('./signal-bot-state');
+    } catch (error) {
+      console.error('[SignalHost] Image migration failed (non-fatal):', error);
+    }
+  }
 
   // Start the host
   try {
